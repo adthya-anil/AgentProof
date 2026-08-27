@@ -48,13 +48,67 @@ export class OpenAICompatibleLLM implements LLM {
     this.maxRetries = config.maxRetries ?? 2;
   }
 
+  /**
+   * Provider quirks discovered at runtime rather than configured up front.
+   *
+   * "OpenAI-compatible" is a spectrum. Azure's reasoning deployments reject
+   * `temperature` unless it is the default and require `max_completion_tokens`
+   * in place of `max_tokens`; other gateways differ again. Rather than ask the
+   * operator to know which dialect their endpoint speaks, the adapter reads the
+   * 400 it gets back, adapts, and remembers — so the first call self-heals and
+   * every later call is already correct.
+   */
+  private omitTemperature = false;
+  private useMaxCompletionTokens = false;
+
   async complete(request: CompletionRequest): Promise<CompletionResult> {
+    let json: Record<string, unknown>;
+    try {
+      json = await this.requestWithRetry(this.buildBody(request));
+    } catch (error) {
+      const adapted = this.adaptToProviderComplaint(error);
+      if (!adapted) throw error;
+      json = await this.requestWithRetry(this.buildBody(request));
+    }
+    return this.parseCompletion(json);
+  }
+
+  /**
+   * Turns an unsupported-parameter 400 into a retry that omits or renames it.
+   * Returns false when the error is something we cannot work around.
+   */
+  private adaptToProviderComplaint(error: unknown): boolean {
+    if (!(error instanceof LlmError) || error.kind !== "provider") return false;
+    const message = error.message.toLowerCase();
+
+    if (!this.omitTemperature && message.includes("temperature")) {
+      this.omitTemperature = true;
+      return true;
+    }
+    if (!this.useMaxCompletionTokens && message.includes("max_tokens")) {
+      this.useMaxCompletionTokens = true;
+      return true;
+    }
+    return false;
+  }
+
+  private buildBody(request: CompletionRequest): Record<string, unknown> {
     const body: Record<string, unknown> = {
       model: this.config.model,
       messages: this.toWireMessages(request),
-      temperature: request.temperature ?? 0,
     };
-    if (request.maxTokens) body.max_tokens = request.maxTokens;
+
+    // Determinism matters for reproducible runs, so temperature is sent when the
+    // provider tolerates it and quietly dropped when it does not.
+    if (!this.omitTemperature) body.temperature = request.temperature ?? 0;
+
+    if (request.maxTokens) {
+      if (this.useMaxCompletionTokens) {
+        body.max_completion_tokens = request.maxTokens;
+      } else {
+        body.max_tokens = request.maxTokens;
+      }
+    }
     if (request.tools && request.tools.length > 0) {
       body.tools = request.tools.map((tool) => ({
         type: "function",
@@ -69,8 +123,10 @@ export class OpenAICompatibleLLM implements LLM {
     if (request.responseFormat === "json") {
       body.response_format = { type: "json_object" };
     }
+    return body;
+  }
 
-    const json = await this.requestWithRetry(body);
+  private parseCompletion(json: Record<string, unknown>): CompletionResult {
     const choice = (json.choices as Array<Record<string, unknown>>)?.[0];
     if (!choice) {
       throw new LlmError("Model returned no choices", "provider", false);
