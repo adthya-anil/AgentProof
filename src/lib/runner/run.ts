@@ -1,3 +1,4 @@
+import type { AuditEvent } from "../audit/events.js";
 import type { Minor } from "../core/money.js";
 import { createEnvironment, createIntent } from "../harness.js";
 import type { Environment, EnvironmentOptions } from "../harness.js";
@@ -26,7 +27,13 @@ export interface JourneyResult {
   note: string;
   violations: Violation[];
   escalations: Violation[];
-  /** Subset of violations attributed to the integration under test. */
+  /**
+   * Violations that indicate a genuine defect in the integration under test.
+   *
+   * Empty when the merchant's own code rejected the operation, even if the Guard
+   * raised findings — a concurring verdict confirms correct behaviour rather
+   * than revealing a bug.
+   */
   integrationDefects: Violation[];
   firedInvariants: string[];
   moneyAtRiskMinor: Minor;
@@ -37,6 +44,11 @@ export interface JourneyResult {
   /** True when the merchant's own code caught the problem. */
   selfRejected: boolean;
   auditEvents: number;
+  /**
+   * Full event trail for this journey, so a report or dashboard can replay it
+   * without re-executing the scenario. Kept in memory: a journey is ~20 events.
+   */
+  auditTrail: readonly AuditEvent[];
   auditChainOk: boolean;
   durationMs: number;
   error: string | null;
@@ -104,7 +116,11 @@ export async function runScenario(
      *     is the system working as intended.
      *  3. Escalations are safe outcomes that need a human, never defects.
      */
-    const defects = integrationDefects(violations);
+    // A self-rejection clears the integration of blame entirely, so the defect
+    // list must agree with the disposition. Reporting a "defect" on a journey
+    // classified as safely rejected would let the summary and the violation list
+    // contradict each other.
+    const defects = selfRejected ? [] : integrationDefects(violations);
     const disposition: JourneyDisposition = selfRejected
       ? "safely_rejected"
       : defects.length > 0
@@ -138,6 +154,7 @@ export async function runScenario(
       duplicatePayableOrders: Math.max(0, payable.length - 1),
       selfRejected,
       auditEvents: env.audit.all().length,
+      auditTrail: env.audit.all(),
       auditChainOk: chain.ok,
       durationMs: Date.now() - startedAt,
       error: null,
@@ -168,6 +185,7 @@ function errorResult(
     duplicatePayableOrders: 0,
     selfRejected: false,
     auditEvents: 0,
+    auditTrail: [],
     auditChainOk: true,
     durationMs: Date.now() - startedAt,
     error: error instanceof Error ? error.message : String(error),

@@ -89,6 +89,12 @@ export const productSafetyInvariant: Invariant = {
 
     if (conflicts.length > 0) {
       return violation({
+        // The merchant published accurate, complete data for these products and
+        // the agent bundled them anyway. Responsibility for honouring published
+        // constraints sits with the agent, so this must not be scored as a
+        // merchant defect. Missing data is a different story — see below, where
+        // the merchant genuinely failed to supply it.
+        attribution: "agent",
         message:
           `Bundle violates a stated buyer safety constraint: ` +
           conflicts

@@ -19,7 +19,10 @@ import {
 import { renderTrace } from "../lib/report/trace.js";
 import { createEnvironment, createIntent } from "../lib/harness.js";
 import { runScenario, runSuite } from "../lib/runner/run.js";
-import { REGRESSION_SCENARIOS, scenarioById } from "../lib/scenarios/regression.js";
+import { assembleSuite } from "../lib/scenarios/index.js";
+import { scenarioById } from "../lib/scenarios/regression.js";
+import { llmFromEnv } from "../lib/agent/factory.js";
+import { loadPolicyFromFile } from "../lib/policy/load.js";
 
 /** Regression scenario that exercises each seeded defect. */
 const DEFECT_SCENARIOS: Record<string, string> = {
@@ -34,12 +37,23 @@ const DEFECT_SCENARIOS: Record<string, string> = {
 };
 
 async function main(): Promise<void> {
+  // ---- 0. Assemble the suite: fixed regression + AI-generated ------------
+  const llm = llmFromEnv();
+  const policy = loadPolicyFromFile();
+  const suite = await assembleSuite({ llm, policy, generatedCount: 12 });
+  const provenance = {
+    generatorModel: suite.generatorModel,
+    generatorIsReal: suite.generatorIsReal,
+    regressionCount: suite.regressionCount,
+    generatedCount: suite.generatedCount,
+  };
+
   // ---- 1. Vulnerable integration -----------------------------------------
-  const before = await runSuite(REGRESSION_SCENARIOS, {
+  const before = await runSuite(suite.scenarios, {
     mutations: MutationSet.vulnerable(),
     runId: "preflight_vulnerable",
   });
-  console.log(renderPreflightReport(before));
+  console.log(renderPreflightReport(before, provenance));
 
   // ---- 2. Replay one violation in full ------------------------------------
   console.log(`\n${"═".repeat(78)}\n`);
@@ -62,11 +76,11 @@ async function main(): Promise<void> {
 
   // ---- 3. Fixed integration, identical suite ------------------------------
   console.log(`\n${"═".repeat(78)}\n`);
-  const after = await runSuite(REGRESSION_SCENARIOS, {
+  const after = await runSuite(suite.scenarios, {
     mutations: MutationSet.fixed(),
     runId: "preflight_fixed",
   });
-  console.log(renderPreflightReport(after));
+  console.log(renderPreflightReport(after, provenance));
 
   // ---- 4. Mutation evaluation, one mutant at a time -----------------------
   console.log(`\n${"═".repeat(78)}\n`);

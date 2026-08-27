@@ -19,45 +19,62 @@ invalid transactions before money moves.
 
 ## Current status
 
-Phase 1 is complete: the deterministic core, the demo merchant, the seeded
-defects, and the measured evaluation. Phase 2 (LLM buyer agent, AI scenario
-generation, dashboard) is not built yet — see [Not built yet](#not-built-yet).
+Both phases are built: the deterministic engine, the demo merchant, the seeded
+defects and measured evaluation, plus the autonomous buyer agent, AI scenario
+generation, the dashboard, and a real Razorpay test-mode path.
 
-Everything claimed below is produced by a command in this repo.
+Everything claimed below is produced by a command in this repo. Nothing requires
+an API key or network access unless you explicitly opt in.
 
 ```bash
 npm install
-npm test              # 82 tests
+npm test                 # 140 tests
 npm run typecheck
+
 npm run demo:happy       # successful ₹1,399 transaction
 npm run demo:blocked     # runtime block before any payment exists
 npm run demo:defects     # the four headline seeded defects
-npm run demo:preflight   # readiness report + fix-and-rerun + mutation scorecard
+npm run demo:preflight   # 24 journeys: readiness report, fix-and-rerun, scorecard
+npm run demo:razorpay    # real Razorpay test-mode order (needs test keys)
+
+npm run build && npm start   # dashboard on http://localhost:3000
 ```
 
 ---
 
 ## Measured results
 
-From `npm run demo:preflight`, 12 regression journeys against the same suite:
+From `npm run demo:preflight`: **24 journeys** (12 fixed regression + 12
+AI-generated), the identical suite run against both integrations.
 
 | | Vulnerable integration | Fixed integration |
 |---|---|---|
-| Passed | 2 | 3 |
-| Safely rejected | 6 | 9 |
-| Escalated for approval | 1 | 0 |
-| Unsafe violations | 3 | 0 |
+| Passed | 8 | 10 |
+| Safely rejected | 10 | 13 |
+| Escalated for approval | 2 | 1 |
+| Unsafe violations | 4 | 0 |
 | Money-critical escapes | 0 | 0 |
-| Money at risk (prevented) | ₹8,944.56 | ₹6,844.00 |
+| Money at risk (prevented) | ₹12,027.18 | ₹9,809.00 |
 | **Readiness** | **NOT READY** | **READY FOR CONTROLLED TEST** |
 
 Mutation evaluation, one mutant at a time:
 
 ```
 Defect detection recall: 8/8 (100%)
-False-positive rate: 0/12 safe journeys flagged (0%)
+False-positive rate: 0/24 safe journeys flagged (0%)
 Unsafe money actions that escaped the Guard: 0
 ```
+
+Coverage by scenario category: 9 adversarial, 5 boundary, 5 normal,
+5 state-perturbation.
+
+One result worth singling out. The AI-generated adversarial journey
+`gen-grab-every-discount` asked for *every* discount it qualified for, stacked
+three promotions, and reached an **11.44% effective discount plus a floor-price
+breach on four line items** — strictly worse than the 8.7% the hand-written
+regression scenario finds, and a case nobody scripted. Generation earning its
+place is exactly this: finding the path a developer would not have thought to
+write down.
 
 "Readiness report", never "certified" or "guaranteed safe" — no finite test suite
 can prove the absence of defects. That is also why the same policy engine stays
@@ -68,14 +85,16 @@ active at runtime.
 ## How it works
 
 ```
-Scenario suite → Buyer journey → AgentProof Guard → HamperHub commerce
-                                       │                    │
-                                  deterministic         two-phase
-                                  invariants            checkout
-                                       │                    │
-                                  allow / block ──────→ payment provider
-                                       │
-                                  hash-chained audit log
+Scenario generator          Buyer agent            AgentProof Guard
+(fixed + AI-generated)  →  (LLM tool loop)   →   (12 deterministic
+                                                    invariants)
+                                                        │
+                                            allow ─────┼───── block
+                                              │           │
+                                    HamperHub commerce   audit log
+                                    (two-phase checkout) (hash-chained)
+                                              │
+                                    Razorpay test mode / offline fake
 ```
 
 Two components share one policy engine:
@@ -136,6 +155,76 @@ the true 8.7% regardless of how the merchant layered its promotions.
 
 ---
 
+## The autonomous buyer agent
+
+`src/lib/agent/` holds the agent that actually drives the journeys. It receives a
+buyer intent and the commerce tool declarations, then chooses its own sequence of
+tool calls, reacting to each result — the open-ended behaviour a fixed test script
+cannot capture. Every call goes through the Guard, so its autonomy never extends
+to moving money: it can *request* a checkout, but deterministic code decides
+whether one happens.
+
+Two interchangeable models sit behind one interface:
+
+| Adapter | When | Behaviour |
+|---|---|---|
+| `scripted` (default) | no key, no network | Deterministic state machine. Reproducible byte-for-byte. |
+| `openai` | `LLM_ADAPTER=openai` + `LLM_API_KEY` | Genuinely adaptive; any OpenAI-compatible endpoint. |
+
+The scripted model is not a stub returning canned strings. It executes an ordered
+plan whose arguments are resolved from earlier tool responses (`$ref:quote_id`
+picks up the quote the merchant just issued), and it reproduces the *risky* moves
+a real agent makes — stacking every discount it can find, trusting a filtered
+search result, retrying after a timeout. The agent code path is byte-for-byte
+identical either way, which is what lets a demo rehearsed on the scripted model
+behave the same when pointed at a real one.
+
+The agent is deliberately constrained: a hard tool-call budget so a looping model
+always terminates, schema validation on every argument, and unknown tool names
+rejected outright.
+
+---
+
+## AI scenario generation
+
+`src/lib/scenarios/generate.ts` produces the semantic half of the suite. It reads
+the tool schemas, the merchant policy, the catalog (including which products have
+*unknown* allergen data) and any prior failures, then invents buyer goals —
+ambiguous requests, adversarial framing, interacting constraints.
+
+It never decides pass/fail. It only invents what the agent should attempt;
+deterministic invariants still render every verdict. Generated scenarios also
+declare no target invariant, so they cannot cheat their way to a detection.
+
+Model output is schema-validated and deduplicated, and any strategy the model
+tries to supply is **stripped** — real-LLM journeys run adaptively rather than
+replaying a plan the model wrote for itself. If generation fails for any reason
+the scripted set is used instead, so a preflight run never aborts because an
+upstream provider had a bad minute.
+
+---
+
+## Dashboard
+
+`npm run build && npm start` serves the report at `http://localhost:3000`.
+
+| Route | Shows |
+|---|---|
+| `/` | Readiness, outcome counts, category coverage, journey table |
+| `/violations` | Findings split by responsibility (see below) |
+| `/journey/[id]` | Full replay: intent, tool calls, state changes, failed invariant |
+| `/evaluation` | Mutation scorecard, recall, false-positive rate |
+| `/audit` | Hash-chain status and every money-critical decision |
+| `/policy` | The enforced policy and all 12 invariants |
+
+Toggle between the vulnerable and fixed integrations from any page. Runs execute
+in-process on request — deterministic and ~50ms — so the dashboard always shows a
+run that just happened rather than a cached summary that may no longer match the
+code. Every page is a server component; the pages ship no client JavaScript, and
+there is no `next/font`, so the build needs no network.
+
+---
+
 ## Honest measurement
 
 Three design decisions exist specifically to keep the numbers meaningful.
@@ -146,6 +235,11 @@ blocking an agent that overspent the buyer's stated budget is the system working
 as intended, not a bug in the merchant's code — so `INV-BUDGET`'s stated-budget
 check is attributed to the agent. Without this the false-positive rate would be
 inflated by correct behaviour.
+
+The same reasoning applies to product safety: if the merchant published accurate
+allergen data and the agent bundled a conflicting item anyway, that is the
+agent's error. Only *missing* data — a genuine merchant gap — is charged to the
+integration.
 
 **2. Self-rejection wins.** When the merchant's own code refuses an operation,
 the journey is recorded as *safely rejected* even though the Guard concurs. The
@@ -160,6 +254,11 @@ once, an upstream block can prevent a downstream defect from ever being reached:
 approval and `INV-PRICE-BINDING` is never exercised. Recall is therefore measured
 one mutant at a time, as in standard mutation testing. The masking behaviour has
 its own test rather than being quietly averaged away.
+
+**4. The summary and the detail can never disagree.** The headline count of unsafe
+journeys and the itemised violation list are derived from the same data, and a
+test asserts they stay in step. A report claiming "0 unsafe violations" beside a
+list of defects would destroy trust in every other number on the page.
 
 ---
 
@@ -256,6 +355,30 @@ because thousands of orders against a real sandbox would be slow, rate-limited,
 and impossible to capture without a browser. It reproduces the behaviour that
 matters: a create-order call that times out *after* the order was really created.
 
+### Running a real test transaction
+
+```bash
+PAYMENT_ADAPTER=razorpay npm run demo:razorpay -- --wait=180
+```
+
+The agent drives the journey, the Guard authorises, and a genuine test-mode order
+is created. The script then proves `INV-PAYMENT-STATE` by attempting fulfilment
+before capture and being blocked. Because Razorpay Checkout cannot be completed
+from a script, it writes a self-contained checkout page to `runs/` (public key and
+order id only — the amount is fixed server-side and cannot be altered from the
+browser) and polls until the payment is captured and verified, then fulfils.
+
+Without credentials the script explains what to configure and exits successfully,
+so it is safe to run in CI.
+
+**Verified so far:** the full path up to order creation against the live API — the
+agent's journey, the Guard's authorisation, the HTTPS call to
+`api.razorpay.com/v1/orders`, and correct error handling. Exercised with
+deliberately invalid test keys, which Razorpay rejects with
+`401 Authentication failed`. Live keys are refused before any request is made.
+**Not yet verified:** capture and fulfilment against a real sandbox, which needs
+genuine `rzp_test_` credentials and a browser.
+
 *Sources: Razorpay API documentation, retrieved for endpoint and idempotency
 semantics. Content was rephrased for compliance with licensing restrictions.*
 
@@ -270,12 +393,15 @@ src/lib/audit/                  Append-only hash-chained event log
 src/lib/policy/                 Policy schema + engine + 12 invariants
 src/lib/guard/                  AgentProof Guard
 src/lib/hamperhub/              The merchant under test (+ seeded defects)
+src/lib/agent/                  LLM adapters and the autonomous buyer agent
 src/lib/payments/               Provider interface, Razorpay adapter, fake
-src/lib/scenarios/              12 fixed regression scenarios
+src/lib/scenarios/              12 regression + AI-generated scenarios
 src/lib/runner/                 Journey execution and scoring
 src/lib/report/                 Readiness report and trace replay
+src/lib/dashboard/              Server-side data layer for the dashboard
+src/app/                        Next.js dashboard (server components only)
 src/scripts/                    Runnable demos
-tests/                          82 tests
+tests/                          140 tests
 ```
 
 Money is an integer count of paise throughout. Float rupees are banned: an
@@ -286,19 +412,24 @@ condition, and every run is reproducible from a seed.
 
 ---
 
-## Not built yet
+## Limitations
 
-Honest scope. Phase 1 delivers the deterministic core; these remain:
+Honest scope. What is built is listed above; these are the real gaps:
 
-- **LLM buyer agent** — journeys are currently scripted regression scenarios.
-  The tool schemas and declarations the model needs are already defined in
-  `src/lib/hamperhub/tools.ts`.
-- **AI scenario generation** (§7B) — semantic and adversarial goal synthesis.
-- **Next.js dashboard** (§8) — the report is currently CLI output.
-- **A real Razorpay test-mode transaction** — the adapter is written but has not
-  been exercised against a live sandbox, because no test credentials are
-  configured. `PAYMENT_ADAPTER=razorpay` with `rzp_test_` keys switches it on.
-- **Concurrency and journey volume** — 12 scenarios today, target 20–25.
+- **A captured Razorpay payment has not been observed end to end.** Order creation
+  against the live API is verified; capture needs genuine test credentials and a
+  browser. See the Razorpay section for exactly what is and is not proven.
+- **The real-LLM path is wired but lightly exercised.** The adapter, retries and
+  fallbacks are tested against stubs. Journeys and generation have been run
+  extensively on the deterministic scripted model, not on a paid model at volume.
+- **Journeys run sequentially.** Concurrent buyers competing for the same scarce
+  stock would exercise reservation races that the current runner does not.
+- **One merchant, one policy.** HamperHub is the only integration under test, so
+  the Guard's independence from a specific commerce backend is a design property
+  rather than a demonstrated one.
+- **Testing cannot prove absence of defects.** Eight seeded defects are detected;
+  that is evidence the invariants work, not a guarantee the space is covered.
+  Hence "readiness report", and hence the Guard stays active at runtime.
 
 ## Configuration
 
@@ -306,9 +437,19 @@ Copy `.env.example` to `.env`. Defaults run fully offline and deterministically.
 
 ```
 PAYMENT_ADAPTER=fake        # or "razorpay" with rzp_test_ credentials
+RAZORPAY_KEY_ID=            # must start with rzp_test_
+RAZORPAY_KEY_SECRET=
+
 LLM_ADAPTER=scripted        # deterministic; no API key needed
+LLM_API_KEY=                # required only for LLM_ADAPTER=openai
+LLM_MODEL=                  # defaults to gpt-4o-mini
+LLM_BASE_URL=               # any OpenAI-compatible endpoint
+
 AGENTPROOF_SEED=1337        # reproducible demo runs
 ```
+
+Every default keeps the project offline and deterministic. The real adapters are
+strictly opt-in, and the suite must pass without them.
 
 ---
 

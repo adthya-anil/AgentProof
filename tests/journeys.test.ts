@@ -179,6 +179,37 @@ describe("runtime blocking", () => {
   });
 });
 
+describe("report consistency", () => {
+  /**
+   * The run summary counts unsafe journeys by disposition while the violations
+   * list renders `integrationDefects`. If those ever diverge the dashboard shows
+   * "0 unsafe violations" next to a list of defects, which would destroy trust
+   * in the whole report.
+   */
+  it("keeps the defect list in step with the disposition", async () => {
+    for (const mutations of [MutationSet.fixed(), MutationSet.vulnerable()]) {
+      const suite = await runSuite(REGRESSION_SCENARIOS, { mutations });
+      for (const journey of suite.journeys) {
+        expect(journey.integrationDefects.length > 0).toBe(
+          journey.disposition === "unsafe_violation",
+        );
+      }
+      expect(
+        suite.journeys.filter((j) => j.integrationDefects.length > 0).length,
+      ).toBe(suite.unsafeViolations);
+    }
+  });
+
+  it("attributes nothing to the integration when it self-rejects", async () => {
+    const suite = await runSuite(REGRESSION_SCENARIOS, {
+      mutations: MutationSet.fixed(),
+    });
+    for (const journey of suite.journeys.filter((j) => j.selfRejected)) {
+      expect(journey.integrationDefects).toEqual([]);
+    }
+  });
+});
+
 describe("determinism", () => {
   it("produces identical results across repeated runs", async () => {
     const first = await runSuite(REGRESSION_SCENARIOS, {

@@ -9,7 +9,18 @@ import { SEVERITY_RANK } from "../policy/violations.js";
  * suite can prove the absence of defects, which is also why the same policy
  * engine stays active at runtime.
  */
-export function renderPreflightReport(suite: SuiteResult): string {
+export interface ReportProvenance {
+  /** Model that generated the semantic scenarios. */
+  generatorModel: string;
+  generatorIsReal: boolean;
+  regressionCount: number;
+  generatedCount: number;
+}
+
+export function renderPreflightReport(
+  suite: SuiteResult,
+  provenance?: ReportProvenance,
+): string {
   const lines: string[] = [];
   const defectJourneys = suite.journeys.filter(
     (j) => j.disposition === "unsafe_violation",
@@ -25,6 +36,14 @@ export function renderPreflightReport(suite: SuiteResult): string {
     }`,
   );
   lines.push(`Journeys executed: ${suite.journeys.length}`);
+  if (provenance) {
+    lines.push(
+      `  ${provenance.regressionCount} fixed regression + ` +
+        `${provenance.generatedCount} AI-generated ` +
+        `(${provenance.generatorModel}` +
+        `${provenance.generatorIsReal ? "" : ", deterministic"})`,
+    );
+  }
   lines.push("");
   lines.push(`Passed:                   ${pad(suite.passed)}`);
   lines.push(`Safely rejected:          ${pad(suite.safelyRejected)}`);
@@ -70,6 +89,22 @@ export function renderPreflightReport(suite: SuiteResult): string {
     }
     lines.push("");
   }
+
+  const byCategory = new Map<string, { total: number; unsafe: number }>();
+  for (const journey of suite.journeys) {
+    const entry = byCategory.get(journey.category) ?? { total: 0, unsafe: 0 };
+    entry.total += 1;
+    if (journey.disposition === "unsafe_violation") entry.unsafe += 1;
+    byCategory.set(journey.category, entry);
+  }
+  lines.push("Coverage by scenario category:");
+  for (const [category, entry] of [...byCategory.entries()].sort()) {
+    lines.push(
+      `  ${category.padEnd(20)} ${String(entry.total).padStart(2)} journeys, ` +
+        `${entry.unsafe} unsafe`,
+    );
+  }
+  lines.push("");
 
   lines.push("Journeys:");
   for (const journey of suite.journeys) {
