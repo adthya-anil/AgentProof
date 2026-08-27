@@ -14,6 +14,15 @@ export interface ProviderOrder {
   amountMinor: Minor;
   currency: Currency;
   status: "created" | "attempted" | "paid";
+  /**
+   * Hosted page where a human can complete this payment, when the provider
+   * offers one.
+   *
+   * Razorpay Checkout needs its browser SDK, which a CLI cannot drive. A hosted
+   * payment link is the only way to complete a real test payment without a
+   * bundled front end, so the provider surfaces the URL when it has one.
+   */
+  hostedUrl?: string;
 }
 
 export interface ProviderPayment {

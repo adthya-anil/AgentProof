@@ -189,6 +189,7 @@ export function buildPayment(
     status: "captured",
     createdAt: f.clock.now(),
     verified: true,
+    hostedUrl: null,
     ...overrides,
   };
 }

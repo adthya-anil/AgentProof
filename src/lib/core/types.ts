@@ -159,6 +159,8 @@ export interface PaymentAttempt {
   createdAt: Date;
   /** True once the provider's own record has been re-read and matched. */
   verified: boolean;
+  /** Hosted page for completing this payment, when the provider offers one. */
+  hostedUrl: string | null;
 }
 
 export interface Order {

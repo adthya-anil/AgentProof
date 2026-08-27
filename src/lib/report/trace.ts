@@ -45,7 +45,11 @@ function summarizeEvent(event: AuditEvent, showPasses: boolean): string | null {
     case "tool.executed":
       return `${event.toolName} executed — ${event.reason ?? "ok"}`;
     case "tool.rejected":
-      return `${event.toolName} rejected — ${event.reason}`;
+      // Not every rejection comes from an agent tool call: fulfilment is
+      // merchant-initiated and carries no tool name.
+      return event.toolName
+        ? `${event.toolName} rejected — ${event.reason}`
+        : `Rejected — ${event.reason}`;
     case "quote.created": {
       const total = output.total;
       const discounts = Array.isArray(output.discounts) ? output.discounts : [];
@@ -87,8 +91,14 @@ function summarizeEvent(event: AuditEvent, showPasses: boolean): string | null {
         `       Financial action taken: ${output.financial_action_taken}\n` +
         `       Required next action: ${output.required_next_action}`
       );
-    case "razorpay.order_created":
-      return `Razorpay order created: ${event.providerOrderId} for ₹${output.amount}`;
+    case "razorpay.order_created": {
+      // A hosted payment link and a bare order are both payable artefacts, but
+      // calling a link an "order" in a replay is needlessly confusing.
+      const kind = event.providerOrderId?.startsWith("plink_")
+        ? "payment link"
+        : "order";
+      return `Razorpay ${kind} created: ${event.providerOrderId} for ₹${output.amount}`;
+    }
     case "payment.verified":
       return `Payment ${output.status} (verified=${output.verified}) ₹${output.amount}`;
     case "payment.failed":

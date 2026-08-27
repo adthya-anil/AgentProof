@@ -18,6 +18,7 @@
  * explains what to configure and exits successfully, so it is safe to run in CI.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
+import { loadDotEnv } from "../lib/core/env.js";
 import { resolve } from "node:path";
 import { BuyerAgent } from "../lib/agent/buyer.js";
 import { ScriptedLLM, encodeStrategy } from "../lib/agent/scripted.js";
@@ -37,6 +38,10 @@ const HAMPER = [
   { product_id: "p-card-handmade", quantity: 1 },
 ];
 
+function useHostedLink(): boolean {
+  return process.argv.includes("--link");
+}
+
 function parseWaitSeconds(): number {
   const arg = process.argv.find((a) => a.startsWith("--wait"));
   if (!arg) return 0;
@@ -46,16 +51,26 @@ function parseWaitSeconds(): number {
 }
 
 async function main(): Promise<void> {
+  // Must happen before any adapter reads process.env.
+  loadDotEnv();
   const waitSeconds = parseWaitSeconds();
 
   // The real adapter needs real time, not the deterministic ManualClock, because
   // quote expiry is compared against wall-clock while we wait for a human to pay.
   const clock = new ManualClock(new Date());
   const ids = new IdFactory(`live-${Date.now()}`);
-  const selection = selectPaymentAdapter({ ids, clock });
+  const hosted = useHostedLink();
+  const selection = selectPaymentAdapter({
+    ids,
+    clock,
+    collectionMode: hosted ? "payment_link" : "order",
+  });
 
   console.log("AgentProof — real Razorpay test-mode transaction");
-  console.log(`Payment adapter: ${describeAdapter(selection)}\n`);
+  console.log(
+    `Payment adapter: ${describeAdapter(selection)}` +
+      `${hosted ? " · hosted payment link" : ""}\n`,
+  );
 
   if (!selection.available) {
     console.log("This script needs Razorpay test credentials.\n");
@@ -172,13 +187,22 @@ async function main(): Promise<void> {
   }
 
   const quote = env.service.getQuote(checkout.quoteId)!;
-  console.log("Guard authorised the checkout. Razorpay test order created:");
-  console.log(`  order id:  ${attempt.providerOrderId}`);
+  console.log(
+    `Guard authorised the checkout. Razorpay test ` +
+      `${hosted ? "payment link" : "order"} created:`,
+  );
+  console.log(`  ${hosted ? "link id:  " : "order id: "} ${attempt.providerOrderId}`);
   console.log(`  amount:    ${formatMinor(attempt.amountMinor)} ${attempt.currency}`);
   console.log(`  receipt:   ${checkout.idempotencyKey}`);
   console.log(`  quote:     ${quote.id} v${quote.version}\n`);
 
   // Before capture, fulfilment must be impossible. Prove it.
+  //
+  // This probe deliberately trips INV-PAYMENT-STATE, so its finding is an
+  // expected assertion rather than a defect. Count what came before it so the
+  // closing summary can separate the two instead of reporting a scary
+  // "1 violation" on a successful run.
+  const violationsBeforeProbe = env.guard.recordedViolations().length;
   const premature = env.guard.fulfillOrder(checkout.id);
   if (premature.ok) {
     console.error(
@@ -186,32 +210,51 @@ async function main(): Promise<void> {
     );
     process.exit(1);
   }
-  console.log("Fulfilment attempted before capture:");
-  console.log(`  BLOCKED — ${premature.reason}\n`);
-
-  // Emit a checkout page so the payment can actually be completed.
-  const dir = resolve(process.cwd(), "runs");
-  mkdirSync(dir, { recursive: true });
-  const pagePath = resolve(dir, `checkout-${attempt.providerOrderId}.html`);
-  writeFileSync(
-    pagePath,
-    renderCheckoutPage({
-      keyId: selection.keyId!,
-      orderId: attempt.providerOrderId,
-      amountMinor: attempt.amountMinor,
-      currency: attempt.currency,
-      quoteId: quote.id,
-      lineItems: quote.lineItems.map((l) => ({
-        name: l.name,
-        quantity: l.quantity,
-        lineTotalMinor: l.lineTotalMinor,
-      })),
-    }),
-    "utf8",
+  const probeVerdicts =
+    env.guard.recordedViolations().length - violationsBeforeProbe;
+  console.log("Fulfilment attempted before capture (deliberate probe):");
+  console.log(`  BLOCKED — ${premature.reason}`);
+  console.log(
+    `  INV-PAYMENT-STATE fired as expected (${probeVerdicts} verdict).\n`,
   );
-  console.log("To complete the test payment, open this page in a browser:");
-  console.log(`  ${pagePath}`);
-  console.log("  Test card 4111 1111 1111 1111, any future expiry, any CVV.\n");
+
+  const hostedUrl = attempt.hostedUrl;
+
+  // Give the operator a way to actually complete the payment. A hosted link is
+  // a URL anyone can open; the order flow needs a local page running Razorpay's
+  // browser SDK, which only helps if you can reach the filesystem.
+  if (hostedUrl) {
+    console.log("Open this URL in any browser to complete the test payment:");
+    console.log(`\n  ${hostedUrl}\n`);
+    console.log("  Test card 4111 1111 1111 1111, any future expiry, any CVV.");
+    console.log("  No real money moves in test mode.\n");
+  } else {
+    const dir = resolve(process.cwd(), "runs");
+    mkdirSync(dir, { recursive: true });
+    const pagePath = resolve(dir, `checkout-${attempt.providerOrderId}.html`);
+    writeFileSync(
+      pagePath,
+      renderCheckoutPage({
+        keyId: selection.keyId!,
+        orderId: attempt.providerOrderId,
+        amountMinor: attempt.amountMinor,
+        currency: attempt.currency,
+        quoteId: quote.id,
+        lineItems: quote.lineItems.map((l) => ({
+          name: l.name,
+          quantity: l.quantity,
+          lineTotalMinor: l.lineTotalMinor,
+        })),
+      }),
+      "utf8",
+    );
+    console.log("To complete the test payment, open this page in a browser:");
+    console.log(`  ${pagePath}`);
+    console.log("  Test card 4111 1111 1111 1111, any future expiry, any CVV.");
+    console.log(
+      "  If you cannot reach that file, re-run with --link for a hosted URL.\n",
+    );
+  }
 
   if (waitSeconds === 0) {
     console.log(
@@ -283,12 +326,21 @@ async function main(): Promise<void> {
   console.log(`Merchant order confirmed. Inventory committed: coffee ${coffee.available}.\n`);
   console.log(`Audit trail:\n${renderTrace(env.audit.forIntent(intent.id))}`);
   console.log(`\n${renderChainStatus(env.audit)}`);
+  const totalVerdicts = env.guard.recordedViolations().length;
+  const unexpected = totalVerdicts - probeVerdicts;
   console.log(
     `\n✓ Real Razorpay test transaction complete: ` +
-      `${formatMinor(attempt.amountMinor)} charged, ` +
-      `${env.guard.recordedViolations().length} violations, ` +
-      `order ${attempt.providerOrderId}.`,
+      `${formatMinor(attempt.amountMinor)} captured and verified, ` +
+      `${hosted ? "link" : "order"} ${attempt.providerOrderId}.`,
   );
+  console.log(
+    `  Guard verdicts: ${probeVerdicts} expected ` +
+      `(the pre-capture probe), ${unexpected} unexpected.`,
+  );
+  if (unexpected !== 0) {
+    console.error("  ✗ An unexpected violation occurred on a successful run.");
+    process.exit(1);
+  }
 }
 
 function sleep(ms: number): Promise<void> {

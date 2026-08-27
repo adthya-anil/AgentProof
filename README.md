@@ -358,26 +358,66 @@ matters: a create-order call that times out *after* the order was really created
 ### Running a real test transaction
 
 ```bash
+# Hosted payment link — gives a URL you can open anywhere. Recommended.
+PAYMENT_ADAPTER=razorpay npm run demo:razorpay -- --link --wait=180
+
+# Bare Orders API — writes a local page that runs Razorpay's browser SDK.
 PAYMENT_ADAPTER=razorpay npm run demo:razorpay -- --wait=180
 ```
 
-The agent drives the journey, the Guard authorises, and a genuine test-mode order
-is created. The script then proves `INV-PAYMENT-STATE` by attempting fulfilment
-before capture and being blocked. Because Razorpay Checkout cannot be completed
-from a script, it writes a self-contained checkout page to `runs/` (public key and
-order id only — the amount is fixed server-side and cannot be altered from the
-browser) and polls until the payment is captured and verified, then fulfils.
+The agent drives the journey, the Guard authorises, and only then is a payable
+artefact created. The script proves `INV-PAYMENT-STATE` by deliberately
+attempting fulfilment before capture and being blocked, then polls until the
+payment is captured and **verified against Razorpay** before fulfilling.
 
-Without credentials the script explains what to configure and exits successfully,
-so it is safe to run in CI.
+Two collection modes exist because Razorpay Checkout needs its browser SDK, which
+a CLI cannot drive. `--link` creates a hosted payment link — a URL anyone can
+open — and is the only option if you cannot reach the filesystem. Either way the
+artefact is created solely after a passing verdict, and carries the Guard's
+idempotency key (`receipt` for orders, `reference_id` for links).
 
-**Verified so far:** the full path up to order creation against the live API — the
-agent's journey, the Guard's authorisation, the HTTPS call to
-`api.razorpay.com/v1/orders`, and correct error handling. Exercised with
-deliberately invalid test keys, which Razorpay rejects with
-`401 Authentication failed`. Live keys are refused before any request is made.
-**Not yet verified:** capture and fulfilment against a real sandbox, which needs
-genuine `rzp_test_` credentials and a browser.
+Without credentials the script explains what to configure and exits zero, so it is
+safe in CI.
+
+**This has been run end to end against Razorpay test mode.** A verified transcript:
+
+```
+Guard authorised the checkout. Razorpay test payment link created:
+  link id:   plink_TUskFj744r1ZLS
+  amount:    ₹1,399.00 INR
+  receipt:   idem_d70febc62a927b99d6009cc8
+
+Fulfilment attempted before capture (deliberate probe):
+  BLOCKED — Merchant declined fulfilment: payment is 'created' (verified=false)
+
+Polling Razorpay for up to 180s...
+  status: captured (verified=true)
+
+Payment captured and verified against Razorpay.
+Merchant order confirmed. Inventory committed: coffee 7.
+
+✓ Real Razorpay test transaction complete: ₹1,399.00 captured and verified.
+  Guard verdicts: 1 expected (the pre-capture probe), 0 unexpected.
+```
+
+Read back from Razorpay's API, the payment was `139900` paise — exactly the amount
+the buyer approved — captured via netbanking, against a link carrying our
+idempotency key as its `reference_id`.
+
+### Idempotency, confirmed by the platform
+
+Attempting to reuse a `reference_id` gets rejected by Razorpay outright:
+
+> payment link with given reference_id: … already exists
+
+That is the platform's *only* duplicate defence, and it only helps if the
+integration derives a stable reference and reconciles on retry rather than
+minting a fresh one. The adapter therefore looks up an existing link before
+creating, so a retry converges on the same payable artefact instead of erroring
+— or worse, quietly opening a second one. This is `INV-IDEMPOTENCY`'s argument,
+validated against the real API.
+
+Live keys are refused before any request is made.
 
 *Sources: Razorpay API documentation, retrieved for endpoint and idempotency
 semantics. Content was rephrased for compliance with licensing restrictions.*
@@ -416,9 +456,11 @@ condition, and every run is reproducible from a seed.
 
 Honest scope. What is built is listed above; these are the real gaps:
 
-- **A captured Razorpay payment has not been observed end to end.** Order creation
-  against the live API is verified; capture needs genuine test credentials and a
-  browser. See the Razorpay section for exactly what is and is not proven.
+- **Razorpay is verified in test mode only, on one account.** A full capture has
+  been observed end to end, but only via netbanking on a fresh test account.
+  Card payments were rejected there as international, which is an account
+  configuration rather than an integration problem — worth knowing if you
+  reproduce it.
 - **The real-LLM path is wired but lightly exercised.** The adapter, retries and
   fallbacks are tested against stubs. Journeys and generation have been run
   extensively on the deterministic scripted model, not on a paid model at volume.

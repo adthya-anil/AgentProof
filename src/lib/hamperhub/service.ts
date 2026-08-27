@@ -524,6 +524,7 @@ export class HamperHubService {
         status: "created",
         createdAt: this.deps.clock.now(),
         verified: false,
+        hostedUrl: order.hostedUrl ?? null,
       };
       this.payments.set(attempt.id, attempt);
       checkout.status = "authorized";
