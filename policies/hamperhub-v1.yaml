@@ -1,0 +1,24 @@
+policy_id: hamperhub-v1
+currency: INR
+
+transaction:
+  maximum_amount: 5000
+  quote_expiry_minutes: 10
+  require_buyer_confirmation: true
+  one_payment_per_intent: true
+
+pricing:
+  maximum_discount_percent: 5
+  allow_discount_stacking: false
+  payment_must_equal_approved_quote: true
+  enforce_floor_price: true
+
+inventory:
+  require_current_availability: true
+  reserve_before_checkout: true
+  reservation_minutes: 10
+
+products:
+  bundles_allowed: true
+  unknown_allergen_status: escalate
+  substitutions_require_approval: true
