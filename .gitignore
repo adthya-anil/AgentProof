@@ -7,3 +7,6 @@ coverage/
 .env.local
 .DS_Store
 runs/
+
+# TypeScript incremental build cache
+*.tsbuildinfo
