@@ -13,14 +13,20 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "vitest --run",
+    "db:up": "bash scripts/dev-db.sh up",
+    "db:down": "bash scripts/dev-db.sh down",
+    "db:migrate": "tsx src/scripts/db-migrate.ts",
+    "db:status": "tsx src/scripts/db-status.ts",
     "demo:happy": "tsx src/scripts/happy-path.ts",
     "demo:blocked": "tsx src/scripts/blocked-checkout.ts",
     "demo:defects": "tsx src/scripts/seeded-defects.ts",
     "demo:preflight": "tsx src/scripts/preflight.ts",
+    "demo:concurrency": "tsx src/scripts/concurrency.ts",
     "demo:razorpay": "tsx src/scripts/razorpay-live.ts"
   },
   "dependencies": {
     "next": "^15.5.24",
+    "pg": "^8.23.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "yaml": "^2.6.1",
@@ -28,6 +34,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
     "tsx": "^4.19.2",

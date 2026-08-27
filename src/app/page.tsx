@@ -51,7 +51,8 @@ export default async function RunSummaryPage({
           </div>
           <div>
             <span>Journeys</span>
-            {info.regressionCount} regression + {info.generatedCount} AI-generated
+            {info.regressionCount} regression + {info.perturbationCount}{" "}
+            perturbation + {info.generatedCount} AI-generated
           </div>
           <div>
             <span>Scenario generator</span>

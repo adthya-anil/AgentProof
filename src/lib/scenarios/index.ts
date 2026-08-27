@@ -1,6 +1,7 @@
 import type { LLM } from "../agent/llm.js";
 import type { Policy } from "../policy/schema.js";
 import { generateScenarios } from "./generate.js";
+import { PERTURBATION_SCENARIOS } from "./perturbations.js";
 import { REGRESSION_SCENARIOS } from "./regression.js";
 import type { Scenario } from "./types.js";
 
@@ -17,6 +18,7 @@ export interface SuiteCompositionOptions {
 export interface AssembledSuite {
   scenarios: Scenario[];
   regressionCount: number;
+  perturbationCount: number;
   generatedCount: number;
   /** Which model produced the generated half, for the report header. */
   generatorModel: string;
@@ -39,14 +41,17 @@ export async function assembleSuite(
   const generated = await generateScenarios({
     llm: options.llm,
     policy: options.policy,
-    count: options.generatedCount ?? 12,
+    // 12 regression + 4 perturbation + 9 generated = 25, the top of the
+    // spec's 20-25 journey range.
+    count: options.generatedCount ?? 9,
     priorFailures: options.priorFailures ?? [],
     maxToolCalls: options.maxToolCalls ?? 12,
   });
 
   return {
-    scenarios: [...REGRESSION_SCENARIOS, ...generated],
+    scenarios: [...REGRESSION_SCENARIOS, ...PERTURBATION_SCENARIOS, ...generated],
     regressionCount: REGRESSION_SCENARIOS.length,
+    perturbationCount: PERTURBATION_SCENARIOS.length,
     generatedCount: generated.length,
     generatorModel: options.llm.name,
     generatorIsReal: options.llm.isReal,
@@ -54,5 +59,6 @@ export async function assembleSuite(
 }
 
 export { REGRESSION_SCENARIOS, scenarioById } from "./regression.js";
+export { PERTURBATION_SCENARIOS } from "./perturbations.js";
 export { generateScenarios, SCRIPTED_GENERATED } from "./generate.js";
 export type { Scenario, ScenarioCategory, ScenarioOutcome } from "./types.js";

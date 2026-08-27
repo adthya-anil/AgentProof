@@ -11,11 +11,14 @@ export function Tabs({
   active,
   variant,
 }: {
-  active: "run" | "violations" | "evaluation" | "policy" | "audit";
+  active: "hamperhub" | "run" | "violations" | "evaluation" | "policy" | "audit";
   variant: IntegrationVariant;
 }) {
   const q = `?integration=${variant}`;
   const tabs: Array<{ key: typeof active; href: string; label: string }> = [
+    // The merchant comes first: you cannot judge a report about an integration
+    // you have not seen.
+    { key: "hamperhub", href: "/hamperhub", label: "HamperHub" },
     { key: "run", href: `/${q}`, label: "Run summary" },
     { key: "violations", href: `/violations${q}`, label: "Violations" },
     { key: "evaluation", href: `/evaluation`, label: "Evaluation" },

@@ -1,5 +1,5 @@
 import type { BuyerIntent } from "../core/types.js";
-import type { Guard, ToolResult } from "../guard/guard.js";
+import type { ToolCaller, ToolResult } from "../guard/guard.js";
 import { TOOL_DECLARATIONS, TOOL_NAMES, type ToolName } from "../hamperhub/tools.js";
 import {
   type ChatMessage,
@@ -26,11 +26,20 @@ import {
 
 export interface BuyerAgentOptions {
   llm: LLM;
-  guard: Guard;
+  /** Usually the Guard; may be a perturbation wrapper around it. */
+  guard: ToolCaller;
   /** Hard cap on tool calls, so a confused or looping model always terminates. */
   maxToolCalls?: number;
   /** Extra guidance appended to the system prompt (e.g. a scripted strategy). */
   systemSuffix?: string;
+  /**
+   * Abandon the journey when a tool call is blocked outright.
+   *
+   * Defaults to true because that is what a competent agent does, and because
+   * continuing buries the real failure under follow-up errors caused by missing
+   * ids. Set false to study how an agent behaves when it ignores a refusal.
+   */
+  stopOnHardFailure?: boolean;
 }
 
 export interface AgentTranscriptEntry {
@@ -81,15 +90,30 @@ briefly explain.`;
 
 export class BuyerAgent {
   private readonly llm: LLM;
-  private readonly guard: Guard;
+  private readonly guard: ToolCaller;
   private readonly maxToolCalls: number;
   private readonly systemSuffix: string;
+  private readonly stopOnHardFailure: boolean;
 
   constructor(options: BuyerAgentOptions) {
     this.llm = options.llm;
     this.guard = options.guard;
     this.maxToolCalls = options.maxToolCalls ?? 12;
     this.systemSuffix = options.systemSuffix ?? "";
+    this.stopOnHardFailure = options.stopOnHardFailure ?? true;
+  }
+
+  /**
+   * A refusal there is no point working around.
+   *
+   * A provider timeout is explicitly *not* hard: retrying it is legitimate, and
+   * that retry is exactly the behaviour the idempotency rule exists to contain.
+   */
+  private isHardFailure(result: Extract<ToolResult, { ok: false }>): boolean {
+    if (result.decision === "invalid") return false;
+    return !(result.decision === "rejected" && !result.blockedByGuard
+      ? /retryable/i.test(result.reason)
+      : false);
   }
 
   async run(intent: BuyerIntent): Promise<AgentRunResult> {
@@ -190,6 +214,24 @@ export class BuyerAgent {
           name: call.name,
           content: JSON.stringify(this.toolPayload(result)),
         });
+
+        // Stop on a hard block. A competent agent that is told "checkout blocked,
+        // quote expired" does not then ask for the payment status of a payment
+        // that was never created. Marching on would also bury the real failure
+        // under a meaningless follow-up error.
+        if (this.stopOnHardFailure && !result.ok && this.isHardFailure(result)) {
+          return {
+            reachedCheckout: transcript.some(
+              (t) => t.tool === "get_payment_status" && t.ok,
+            ),
+            toolCalls,
+            transcript,
+            finalMessage: `Stopped: ${result.reason}`,
+            model,
+            stopReason: "no_tool_call",
+            lastResult,
+          };
+        }
 
         if (toolCalls >= this.maxToolCalls) break;
       }

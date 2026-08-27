@@ -233,7 +233,8 @@ function toScenario(
     async execute(c: ScenarioContext): Promise<ScenarioOutcome> {
       const agent = new BuyerAgent({
         llm: options.llm,
-        guard: c.guard,
+        // `c.tools` is the Guard unless the scenario perturbs the transport.
+        guard: c.tools,
         systemSuffix: suffix,
         maxToolCalls: options.maxToolCalls ?? 12,
       });

@@ -14,6 +14,7 @@ export interface ReportProvenance {
   generatorModel: string;
   generatorIsReal: boolean;
   regressionCount: number;
+  perturbationCount: number;
   generatedCount: number;
 }
 
@@ -39,6 +40,7 @@ export function renderPreflightReport(
   if (provenance) {
     lines.push(
       `  ${provenance.regressionCount} fixed regression + ` +
+        `${provenance.perturbationCount} state-perturbation + ` +
         `${provenance.generatedCount} AI-generated ` +
         `(${provenance.generatorModel}` +
         `${provenance.generatorIsReal ? "" : ", deterministic"})`,
