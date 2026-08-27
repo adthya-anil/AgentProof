@@ -115,6 +115,7 @@ export class PolicyEngine {
         intentId: ctx.intent.id,
         quoteId: ctx.quote?.id ?? null,
         at: ctx.clock.now(),
+        detectedAtMs: Date.now(),
       };
 
       if (outcome.status === "escalation") escalations.push(record);

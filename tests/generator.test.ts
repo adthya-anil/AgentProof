@@ -208,7 +208,9 @@ describe("assembleSuite", () => {
     });
     expect(suite.regressionCount).toBe(REGRESSION_SCENARIOS.length);
     expect(suite.generatedCount).toBe(12);
-    expect(suite.scenarios).toHaveLength(REGRESSION_SCENARIOS.length + 12);
+    expect(suite.scenarios).toHaveLength(
+      suite.regressionCount + suite.perturbationCount + suite.generatedCount,
+    );
     expect(suite.generatorIsReal).toBe(false);
   });
 

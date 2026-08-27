@@ -307,6 +307,19 @@ export class HamperHubService {
       );
     }
 
+    // A duplicated or replayed approval must not mint a second receipt. Two
+    // receipts for one quote are individually valid, so no invariant would fire,
+    // yet the spare could later be paired with a different checkout. Converging
+    // on the existing receipt removes the ambiguity entirely.
+    const existing = [...this.approvals.values()].find(
+      (receipt) =>
+        receipt.intentId === input.intentId &&
+        receipt.quoteId === quote.id &&
+        receipt.quoteVersion === quote.version &&
+        receipt.approvedAmountMinor === input.approvedAmountMinor,
+    );
+    if (existing) return { ...existing };
+
     const receipt: ApprovalReceipt = {
       id: this.deps.ids.next("appr"),
       quoteId: quote.id,

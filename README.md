@@ -28,45 +28,68 @@ an API key or network access unless you explicitly opt in.
 
 ```bash
 npm install
-npm test                 # 140 tests
+npm test                    # 176 tests
 npm run typecheck
 
-npm run demo:happy       # successful ₹1,399 transaction
-npm run demo:blocked     # runtime block before any payment exists
-npm run demo:defects     # the four headline seeded defects
-npm run demo:preflight   # 24 journeys: readiness report, fix-and-rerun, scorecard
-npm run demo:razorpay    # real Razorpay test-mode order (needs test keys)
+npm run demo:happy          # successful ₹1,399 transaction
+npm run demo:blocked        # runtime block before any payment exists
+npm run demo:defects        # the four headline seeded defects
+npm run demo:preflight      # 25 journeys: readiness report, metrics, scorecard
+npm run demo:concurrency    # 5 buyers racing for 3 units of stock
+npm run demo:razorpay       # real Razorpay test-mode payment (needs test keys)
 
-npm run build && npm start   # dashboard on http://localhost:3000
+npm run build && npm start  # dashboard on http://localhost:3000
+
+npm run db:up               # optional: local Postgres for persisted runs
+npm run db:migrate
+npm run db:status
 ```
+
+Nothing above requires a database, an API key, or network access. Those are all
+opt-in, and the suite must pass without them.
 
 ---
 
 ## Measured results
 
-From `npm run demo:preflight`: **24 journeys** (12 fixed regression + 12
-AI-generated), the identical suite run against both integrations.
+From `npm run demo:preflight`: **25 journeys** (12 fixed regression +
+4 state-perturbation + 9 AI-generated), the identical suite run against both
+integrations.
 
 | | Vulnerable integration | Fixed integration |
 |---|---|---|
-| Passed | 8 | 10 |
+| Passed | 8 | 11 |
 | Safely rejected | 10 | 13 |
 | Escalated for approval | 2 | 1 |
-| Unsafe violations | 4 | 0 |
+| Unsafe violations | 5 | 0 |
 | Money-critical escapes | 0 | 0 |
-| Money at risk (prevented) | ₹12,027.18 | ₹9,809.00 |
+| Money at risk (prevented) | ₹16,224.18 | ₹12,607.00 |
 | **Readiness** | **NOT READY** | **READY FOR CONTROLLED TEST** |
 
 Mutation evaluation, one mutant at a time:
 
 ```
 Defect detection recall: 8/8 (100%)
-False-positive rate: 0/24 safe journeys flagged (0%)
+False-positive rate: 0/25 safe journeys flagged (0%)
 Unsafe money actions that escaped the Guard: 0
 ```
 
-Coverage by scenario category: 9 adversarial, 5 boundary, 5 normal,
-5 state-perturbation.
+Coverage and detection metrics, so a clean verdict can be interpreted rather than
+just believed:
+
+| Metric | Vulnerable | Fixed |
+|---|---|---|
+| Policy rules exercised | 12/12 (100%) | 12/12 (100%) |
+| Distinct tool paths covered | 10 | 11 |
+| Critical integration defects | 5 | 0 |
+| Median time to first violation | 1ms | 1ms |
+| Median tool calls to first violation | 4 | 4 |
+| Duplicate payment attempts prevented | 2 | 0 |
+| Unsafe money actions escaped | 0 | 0 |
+
+"0 unsafe violations" means far less if only three of twelve rules were ever
+exercised, or if every journey walked the same tool path. Publishing coverage
+next to the verdict is what makes the verdict mean something.
 
 One result worth singling out. The AI-generated adversarial journey
 `gen-grab-every-discount` asked for *every* discount it qualified for, stacked
@@ -225,6 +248,113 @@ there is no `next/font`, so the build needs no network.
 
 ---
 
+## State perturbation
+
+The suite changes the world while the agent is working, because a defect that only
+appears when prices or stock move cannot be found by replaying fixed inputs. All
+seven perturbations from the spec are implemented:
+
+| Perturbation | Mechanism |
+|---|---|
+| Decrease inventory | `MerchantState.setStock` mid-journey |
+| Hard stock-out | `forceStockOut` also breaks the reservation |
+| Modify a price | `setPrice`, bumping the price version |
+| Expire a quote | injected clock advances past the policy window |
+| Temporary error | provider times out *after* really creating the order |
+| **Delay a response** | latency before a tool, advancing the injected clock |
+| **Duplicate a tool response** | the same call delivered twice |
+| **Replay an earlier request** | an earlier call re-issued verbatim, later |
+
+The last three act on the *transport* rather than on merchant state, via a wrapper
+that sits between the agent and the Guard (`src/lib/runner/perturbation.ts`). The
+wrapper can only decide **what** gets called and in what order — every call still
+passes through the Guard and is judged by the same invariants, so a perturbation
+can reveal a defect but never manufacture one. Duplicates and replays are
+invisible to the agent, which is the point: a well-behaved agent should not have
+to defend against its transport.
+
+Two real bugs surfaced while building these, both fixed:
+
+- The agent marched past hard blocks — asking for the status of a payment that was
+  refused — which buried the real failure under a follow-up error. It now stops on
+  a hard refusal, while still retrying a genuine provider timeout, because that
+  retry is exactly what `INV-IDEMPOTENCY` exists to contain.
+- `approve_quote` minted a second receipt when replayed. Two receipts for one
+  quote are individually valid so no invariant fired, yet the spare could later be
+  paired with a different checkout. It now converges on the existing receipt.
+
+---
+
+## Concurrency
+
+`npm run demo:concurrency` puts five buyers against three units of coffee, sharing
+one merchant state:
+
+```
+  ✓ buyer 1  confirmed
+  ✓ buyer 2  confirmed
+  ✓ buyer 3  confirmed
+  •  buyer 4  create_quote: merchant rejected — Cannot reserve stock
+  •  buyer 5  create_quote: merchant rejected — Cannot reserve stock
+
+  Orders confirmed: 3     Oversold: no     Duplicate payable orders: 0
+  Stock after: available 0, reserved 0     Audit chain: verified
+```
+
+Every other scenario runs in an isolated environment, which is right for measuring
+detection — a perturbation in one journey must not leak into another — but it means
+reservation races are never exercised. Here they are. Losing buyers being turned
+away is the correct outcome; the test also fails if *nobody* succeeds, since a
+Guard that blocks everyone trivially never oversells and would be useless.
+
+**What this does not prove.** Reservation check-and-hold is synchronous within a
+single Node process, so no interleaving can split it. Running two AgentProof
+processes against one shared store would need a row lock or a unique constraint to
+hold the same guarantee.
+
+---
+
+## Persistence
+
+Optional, and off by default. The engine is deterministic and in-memory; a database
+only makes a run survive the process that produced it — which matters when a
+reviewer opens a failure the next morning.
+
+```bash
+npm run db:up        # local Postgres, or set DATABASE_URL yourself
+npm run db:migrate   # idempotent
+npm run demo:preflight
+npm run db:status
+```
+
+A real run, stored:
+
+```
+  merchants  1     policies  1        policy_rules      12
+  products  17     suites    2        test_scenarios    25
+  test_runs 50     violations 30      tool_executions  204
+                                      audit_events     653
+
+Persisted hash chains: 50 checked
+  ✓ all verify
+```
+
+Seventeen tables covering the spec's entities. Money is `BIGINT` paise. A whole
+suite is written in one transaction, because a half-written suite is worse than
+none — a reader could not tell a missing violation from a passing journey.
+
+`verifyStoredChains` recomputes the hash linkage **from the stored rows**. The
+in-memory chain is verified when a run executes, but that proves nothing about what
+reached the database, and the database is the copy anyone will actually read.
+
+Configuration accepts a single `DATABASE_URL` or discrete `PGHOST`/`PGUSER`/
+`PGPASSWORD`/`PGDATABASE`, since a developer with pgAdmin open has the latter to
+hand. A path-like host is treated as a Unix socket. Storage failures never fail a
+preflight: it would be absurd for a full disk to turn a clean readiness report into
+a failed run.
+
+---
+
 ## Honest measurement
 
 Three design decisions exist specifically to keep the numbers meaningful.
@@ -255,7 +385,15 @@ approval and `INV-PRICE-BINDING` is never exercised. Recall is therefore measure
 one mutant at a time, as in standard mutation testing. The masking behaviour has
 its own test rather than being quietly averaged away.
 
-**4. The summary and the detail can never disagree.** The headline count of unsafe
+**4. The narrator may not do arithmetic.** The failure explanation (§16) is the
+one place a model writes prose a developer will act on, so every figure is computed
+deterministically and passed in; the model may only narrate. It never sees raw
+state it could compute from, and its output is never parsed back into a decision.
+A mechanical check then rejects any narrative containing a number the facts do not
+support — a confidently wrong amount in a financial report is worse than no report,
+so a fabricating narrative is withheld and the deterministic account stands alone.
+
+**5. The summary and the detail can never disagree.** The headline count of unsafe
 journeys and the itemised violation list are derived from the same data, and a
 test asserts they stay in step. A report claiming "0 unsafe violations" beside a
 list of defects would destroy trust in every other number on the page.
@@ -435,13 +573,15 @@ src/lib/guard/                  AgentProof Guard
 src/lib/hamperhub/              The merchant under test (+ seeded defects)
 src/lib/agent/                  LLM adapters and the autonomous buyer agent
 src/lib/payments/               Provider interface, Razorpay adapter, fake
-src/lib/scenarios/              12 regression + AI-generated scenarios
-src/lib/runner/                 Journey execution and scoring
-src/lib/report/                 Readiness report and trace replay
+src/lib/scenarios/              Regression, perturbation and generated scenarios
+src/lib/runner/                 Journey execution, perturbation, concurrency
+src/lib/report/                 Readiness report, metrics, trace replay, explanation
+src/lib/db/                     Postgres schema, repository and queries
 src/lib/dashboard/              Server-side data layer for the dashboard
 src/app/                        Next.js dashboard (server components only)
-src/scripts/                    Runnable demos
-tests/                          140 tests
+src/scripts/                    Runnable demos and database tooling
+scripts/dev-db.sh               Local Postgres for development
+tests/                          176 tests
 ```
 
 Money is an integer count of paise throughout. Float rupees are banned: an
@@ -461,14 +601,19 @@ Honest scope. What is built is listed above; these are the real gaps:
   Card payments were rejected there as international, which is an account
   configuration rather than an integration problem — worth knowing if you
   reproduce it.
-- **The real-LLM path is wired but lightly exercised.** The adapter, retries and
-  fallbacks are tested against stubs. Journeys and generation have been run
-  extensively on the deterministic scripted model, not on a paid model at volume.
-- **Journeys run sequentially.** Concurrent buyers competing for the same scarce
-  stock would exercise reservation races that the current runner does not.
+- **The real-LLM path is wired but lightly exercised.** The adapter, retries,
+  fallbacks and the narrator's fabrication guard are tested against stubs. Journeys
+  and generation have been run extensively on the deterministic scripted model, not
+  on a paid model at volume.
+- **Concurrency is single-process.** Interleaved journeys are exercised and cannot
+  oversell, but reservation check-and-hold is synchronous within one Node process.
+  A multi-process deployment would need a row lock or unique constraint.
 - **One merchant, one policy.** HamperHub is the only integration under test, so
   the Guard's independence from a specific commerce backend is a design property
   rather than a demonstrated one.
+- **Persistence is write-and-read-back, not a query surface.** Runs are stored and
+  verified, and the read queries exist, but the dashboard still executes a fresh
+  run per request rather than browsing history.
 - **Testing cannot prove absence of defects.** Eight seeded defects are detected;
   that is evidence the invariants work, not a guarantee the space is covered.
   Hence "readiness report", and hence the Guard stays active at runtime.
@@ -488,6 +633,8 @@ LLM_MODEL=                  # defaults to gpt-4o-mini
 LLM_BASE_URL=               # any OpenAI-compatible endpoint
 
 AGENTPROOF_SEED=1337        # reproducible demo runs
+
+DATABASE_URL=               # optional; or PGHOST/PGUSER/PGPASSWORD/PGDATABASE
 ```
 
 Every default keeps the project offline and deterministic. The real adapters are

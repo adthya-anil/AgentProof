@@ -38,6 +38,7 @@ export interface DashboardEnvironmentInfo {
   generatorIsReal: boolean;
   paymentAdapter: string;
   regressionCount: number;
+  perturbationCount: number;
   generatedCount: number;
 }
 
@@ -63,7 +64,7 @@ export async function getSuiteView(
 
   const llm = llmFromEnv();
   const policy = loadPolicyFromFile();
-  const assembled = await assembleSuite({ llm, policy, generatedCount: 12 });
+  const assembled = await assembleSuite({ llm, policy, generatedCount: 9 });
 
   const suite = await runSuite(assembled.scenarios, {
     mutations: mutationsFor(variant),
@@ -85,6 +86,7 @@ export async function getSuiteView(
       generatorIsReal: assembled.generatorIsReal,
       paymentAdapter: describeAdapter(adapter),
       regressionCount: assembled.regressionCount,
+      perturbationCount: assembled.perturbationCount,
       generatedCount: assembled.generatedCount,
     },
   };

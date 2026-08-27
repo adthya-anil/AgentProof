@@ -33,6 +33,19 @@ export type ToolResult =
       financialActionTaken: boolean;
     };
 
+/**
+ * Anything that can execute a commerce tool call on the agent's behalf.
+ *
+ * The Guard is the real implementation. Extracting the interface lets a
+ * perturbation layer sit between the agent and the Guard — injecting latency,
+ * duplicating a delivery, replaying an earlier request — without the agent or
+ * the Guard knowing it is there. Crucially the wrapper cannot weaken any
+ * verdict: it can only decide *what* gets called, never whether it is allowed.
+ */
+export interface ToolCaller {
+  callTool(name: ToolName, rawArgs: unknown): Promise<ToolResult>;
+}
+
 export interface GuardOptions {
   clock: Clock;
   policy: Policy;
@@ -93,6 +106,19 @@ export class Guard {
       },
       policyVersion: this.opts.policyVersion,
     });
+  }
+
+  /**
+   * A fresh Guard over the same merchant state, service and audit log.
+   *
+   * Concurrent buyers must contend for real stock, so they cannot each have their
+   * own environment. But they must not share violation bookkeeping either, or a
+   * finding could not be attributed to the buyer that caused it. Forking gives
+   * per-buyer accounting over shared state — which is exactly the situation a
+   * reservation race needs.
+   */
+  forkForConcurrentBuyer(): Guard {
+    return new Guard(this.opts);
   }
 
   recordedViolations(): readonly Violation[] {

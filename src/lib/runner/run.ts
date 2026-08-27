@@ -4,7 +4,9 @@ import { createEnvironment, createIntent } from "../harness.js";
 import type { Environment, EnvironmentOptions } from "../harness.js";
 import type { MutationSet } from "../hamperhub/mutations.js";
 import { type Violation, integrationDefects } from "../policy/violations.js";
+import { type SuiteMetrics, computeSuiteMetrics } from "../report/metrics.js";
 import type { Scenario } from "../scenarios/types.js";
+import { type PerturbationEvent, PerturbingToolCaller } from "./perturbation.js";
 
 export type JourneyDisposition =
   /** Completed with a confirmed order and no findings. */
@@ -43,7 +45,19 @@ export interface JourneyResult {
   duplicatePayableOrders: number;
   /** True when the merchant's own code caught the problem. */
   selfRejected: boolean;
+  /** Transport perturbations actually applied, for attributing findings. */
+  perturbations: PerturbationEvent[];
   auditEvents: number;
+  /** Invariants that actually evaluated here (not skipped). Coverage input. */
+  exercisedInvariants: string[];
+  /** Ordered tool names the agent called, for tool-path coverage. */
+  toolPath: string[];
+  /** Real elapsed ms from journey start to the first violation. */
+  msToFirstViolation: number | null;
+  /** Tool calls issued before the first violation surfaced. */
+  toolCallsToFirstViolation: number | null;
+  /** Second payable orders the Guard stopped for this intent. */
+  duplicatePaymentsPrevented: number;
   /**
    * Full event trail for this journey, so a report or dashboard can replay it
    * without re-executing the scenario. Kept in memory: a journey is ~20 events.
@@ -87,8 +101,18 @@ export async function runScenario(
   });
   env.guard.beginIntent(intent);
 
+  // Only wrap when a plan exists, so an unperturbed journey has no extra layer.
+  const perturber = scenario.perturbation
+    ? new PerturbingToolCaller(env.guard, scenario.perturbation, env.clock)
+    : null;
+
   try {
-    const outcome = await scenario.execute({ env, guard: env.guard, intent });
+    const outcome = await scenario.execute({
+      env,
+      guard: env.guard,
+      intent,
+      tools: perturber ?? env.guard,
+    });
 
     const violations = [...env.guard.recordedViolations()];
     const escalations = [...env.guard.recordedEscalations()];
@@ -132,6 +156,45 @@ export async function runScenario(
             : "safely_rejected";
 
     const chain = env.audit.verify();
+    const events = env.audit.all();
+
+    // Invariants that reached a real verdict. A skipped invariant was not
+    // exercised, and counting it would inflate coverage.
+    const exercised = new Set<string>();
+    for (const evaluation of env.guard.allEvaluations()) {
+      for (const result of evaluation.results) {
+        if (result.status !== "skipped") exercised.add(result.invariantId);
+      }
+    }
+
+    const toolRequests = events.filter((e) => e.type === "agent.tool_requested");
+    const toolPath = toolRequests
+      .map((e) => e.toolName)
+      .filter((name): name is string => Boolean(name));
+
+    const firstDetectedAtMs = [...violations, ...escalations].reduce<number | null>(
+      (min, v) => (min === null || v.detectedAtMs < min ? v.detectedAtMs : min),
+      null,
+    );
+    const msToFirstViolation =
+      firstDetectedAtMs === null
+        ? null
+        : Math.max(0, firstDetectedAtMs - startedAt);
+
+    // How many tool calls the agent had issued when the first violation landed.
+    const firstViolationSeq = events.find(
+      (e) => e.type === "policy.evaluated" && (e.violationIds?.length ?? 0) > 0,
+    )?.seq;
+    const toolCallsToFirstViolation =
+      firstViolationSeq === undefined
+        ? null
+        : toolRequests.filter((e) => e.seq < firstViolationSeq).length;
+
+    // Blocked checkouts attributable to the idempotency rule: a second payable
+    // order for one intent that the Guard stopped.
+    const duplicatePaymentsPrevented = [...violations, ...escalations].filter(
+      (v) => v.invariantId === "INV-IDEMPOTENCY",
+    ).length;
 
     return {
       scenarioId: scenario.id,
@@ -153,8 +216,14 @@ export async function runScenario(
       providerOrders,
       duplicatePayableOrders: Math.max(0, payable.length - 1),
       selfRejected,
-      auditEvents: env.audit.all().length,
-      auditTrail: env.audit.all(),
+      perturbations: [...(perturber?.applied() ?? [])],
+      auditEvents: events.length,
+      exercisedInvariants: [...exercised].sort(),
+      toolPath,
+      msToFirstViolation,
+      toolCallsToFirstViolation,
+      duplicatePaymentsPrevented,
+      auditTrail: events,
       auditChainOk: chain.ok,
       durationMs: Date.now() - startedAt,
       error: null,
@@ -184,7 +253,13 @@ function errorResult(
     providerOrders: 0,
     duplicatePayableOrders: 0,
     selfRejected: false,
+    perturbations: [],
     auditEvents: 0,
+    exercisedInvariants: [],
+    toolPath: [],
+    msToFirstViolation: null,
+    toolCallsToFirstViolation: null,
+    duplicatePaymentsPrevented: 0,
     auditTrail: [],
     auditChainOk: true,
     durationMs: Date.now() - startedAt,
@@ -208,6 +283,8 @@ export interface SuiteResult {
   auditChainOk: boolean;
   readiness: "READY FOR CONTROLLED TEST" | "NOT READY";
   durationMs: number;
+  /** §17 coverage and detection metrics, derived from the journeys. */
+  metrics: SuiteMetrics;
 }
 
 /** Runs a suite of scenarios against one integration configuration. */
@@ -257,5 +334,6 @@ export async function runSuite(
         ? "READY FOR CONTROLLED TEST"
         : "NOT READY",
     durationMs: Date.now() - startedAt,
+    metrics: computeSuiteMetrics(journeys),
   };
 }

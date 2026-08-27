@@ -21,7 +21,16 @@ export interface Violation {
   runId: string;
   intentId: string;
   quoteId: string | null;
+  /** Simulated time, from the injected clock. Used in the replay. */
   at: Date;
+  /**
+   * Real wall-clock milliseconds when this was detected.
+   *
+   * Distinct from `at` because the engine runs on a ManualClock that scenarios
+   * advance deliberately. Simulated time answers "when in the journey"; this
+   * answers "how quickly did AgentProof find it", which is the §17 metric.
+   */
+  detectedAtMs: number;
 }
 
 /**

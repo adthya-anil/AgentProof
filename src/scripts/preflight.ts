@@ -6,6 +6,10 @@
  * then scores detection one mutant at a time.
  */
 import { loadDotEnv } from "../lib/core/env.js";
+import { Db, migrate } from "../lib/db/client.js";
+import { persistSuite } from "../lib/db/repository.js";
+import { renderMetrics } from "../lib/report/metrics.js";
+import { explainFailure, renderExplanation } from "../lib/report/explain.js";
 import { formatMinor } from "../lib/core/money.js";
 import {
   MUTATION_IDS,
@@ -19,11 +23,12 @@ import {
 } from "../lib/report/preflight.js";
 import { renderTrace } from "../lib/report/trace.js";
 import { createEnvironment, createIntent } from "../lib/harness.js";
-import { runScenario, runSuite } from "../lib/runner/run.js";
+import { type SuiteResult, runScenario, runSuite } from "../lib/runner/run.js";
 import { assembleSuite } from "../lib/scenarios/index.js";
 import { scenarioById } from "../lib/scenarios/regression.js";
 import { llmFromEnv } from "../lib/agent/factory.js";
 import { loadPolicyFromFile } from "../lib/policy/load.js";
+import type { Policy } from "../lib/policy/schema.js";
 
 /** Regression scenario that exercises each seeded defect. */
 const DEFECT_SCENARIOS: Record<string, string> = {
@@ -43,11 +48,12 @@ async function main(): Promise<void> {
   // ---- 0. Assemble the suite: fixed regression + AI-generated ------------
   const llm = llmFromEnv();
   const policy = loadPolicyFromFile();
-  const suite = await assembleSuite({ llm, policy, generatedCount: 12 });
+  const suite = await assembleSuite({ llm, policy, generatedCount: 9 });
   const provenance = {
     generatorModel: suite.generatorModel,
     generatorIsReal: suite.generatorIsReal,
     regressionCount: suite.regressionCount,
+    perturbationCount: suite.perturbationCount,
     generatedCount: suite.generatedCount,
   };
 
@@ -74,8 +80,19 @@ async function main(): Promise<void> {
     env: replayEnv,
     guard: replayEnv.guard,
     intent: replayIntent,
+    tools: replayEnv.guard,
   });
   console.log(renderTrace(replayEnv.audit.forIntent(replayIntent.id)));
+
+  // Developer-readable explanation of the same failure (§16). The figures are
+  // computed deterministically; a model, when configured, only narrates them.
+  const failing = before.journeys.find(
+    (j) => j.disposition === "unsafe_violation",
+  );
+  if (failing) {
+    console.log("");
+    console.log(renderExplanation(await explainFailure(failing, llm)));
+  }
 
   // ---- 3. Fixed integration, identical suite ------------------------------
   console.log(`\n${"═".repeat(78)}\n`);
@@ -84,6 +101,20 @@ async function main(): Promise<void> {
     runId: "preflight_fixed",
   });
   console.log(renderPreflightReport(after, provenance));
+
+  // ---- 3b. Coverage and detection metrics (§17) ---------------------------
+  console.log(`\n${"═".repeat(78)}\n`);
+  console.log("BEFORE (vulnerable integration)");
+  console.log(renderMetrics(before.metrics));
+  console.log("\nAFTER (fixed integration)");
+  console.log(renderMetrics(after.metrics));
+
+  // ---- 3c. Persist, when a database is configured -------------------------
+  //
+  // Optional by design. The engine is deterministic and in-memory; a database
+  // only makes a run survive the process that produced it. A storage problem
+  // must never fail a preflight, so everything here is best-effort.
+  await persistIfConfigured(before, after, suite, policy);
 
   // ---- 4. Mutation evaluation, one mutant at a time -----------------------
   console.log(`\n${"═".repeat(78)}\n`);
@@ -151,6 +182,60 @@ async function main(): Promise<void> {
     `\n✓ ${scores.length}/${scores.length} seeded defects detected, ` +
       `0 escapes, fixed integration READY.`,
   );
+}
+
+/**
+ * Writes both suites to Postgres when one is configured.
+ *
+ * Swallows storage failures deliberately: a preflight verdict is about the
+ * integration under test, and it would be absurd for a full database disk to
+ * turn a clean readiness report into a failed run.
+ */
+async function persistIfConfigured(
+  before: SuiteResult,
+  after: SuiteResult,
+  suite: { generatorModel: string; generatorIsReal: boolean },
+  policy: Policy,
+): Promise<void> {
+  const db = Db.fromEnv();
+  if (!db) return;
+
+  try {
+    if (!(await db.isReachable())) {
+      console.log("\n(database configured but unreachable; not persisting)");
+      return;
+    }
+    await migrate(db);
+    const common = {
+      policy,
+      policyVersion: before.policyVersion,
+      generatorModel: suite.generatorModel,
+      generatorIsReal: suite.generatorIsReal,
+      paymentAdapter: null,
+    };
+    const a = await persistSuite(db, before, {
+      ...common,
+      integrationVariant: "vulnerable",
+    });
+    const b = await persistSuite(db, after, {
+      ...common,
+      integrationVariant: "fixed",
+    });
+
+    console.log(`\n${"═".repeat(78)}\n`);
+    console.log("Persisted to Postgres:");
+    console.log(`  vulnerable suite ${a.suiteId} — ${a.testRunIds.length} runs`);
+    console.log(`  fixed suite      ${b.suiteId} — ${b.testRunIds.length} runs`);
+    console.log("  inspect with: npm run db:status");
+  } catch (error) {
+    console.log(
+      `\n(persistence skipped: ${
+        error instanceof Error ? error.message : String(error)
+      })`,
+    );
+  } finally {
+    await db.close();
+  }
 }
 
 main().catch((error) => {

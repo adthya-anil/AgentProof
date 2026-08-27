@@ -317,7 +317,13 @@ describe("BuyerAgent", () => {
       },
     };
 
-    const agent = new BuyerAgent({ llm: watcher, guard: env.guard });
+    // Opt out of stopping, because the point of this test is what the model is
+    // told after a failure it chooses to work around.
+    const agent = new BuyerAgent({
+      llm: watcher,
+      guard: env.guard,
+      stopOnHardFailure: false,
+    });
     await agent.run(intent);
 
     // The second request must contain the tool failure from the first.

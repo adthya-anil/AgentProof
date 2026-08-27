@@ -1,7 +1,8 @@
 import type { BuyerIntent } from "../core/types.js";
-import type { Guard, ToolResult } from "../guard/guard.js";
+import type { Guard, ToolCaller, ToolResult } from "../guard/guard.js";
 import type { Environment } from "../harness.js";
 import type { FaultPlan } from "../payments/fake.js";
+import type { PerturbationPlan } from "../runner/perturbation.js";
 
 export type ScenarioCategory =
   | "normal"
@@ -13,6 +14,14 @@ export interface ScenarioContext {
   env: Environment;
   guard: Guard;
   intent: BuyerIntent;
+  /**
+   * What a buyer agent should call.
+   *
+   * Identical to `guard` unless the scenario declares a perturbation plan, in
+   * which case this is the wrapper. Scenarios that drive an agent must use this
+   * rather than `guard`, or the perturbation is silently skipped.
+   */
+  tools: ToolCaller;
 }
 
 export interface ScenarioOutcome {
@@ -45,5 +54,7 @@ export interface Scenario {
   intent: ScenarioIntent;
   /** Provider faults to install before the journey runs. */
   faults?: FaultPlan;
+  /** Transport perturbations: latency, duplicate delivery, replay (§7C). */
+  perturbation?: PerturbationPlan;
   execute(c: ScenarioContext): Promise<ScenarioOutcome>;
 }
