@@ -5,6 +5,7 @@
  * readiness report, reruns the identical suite against the fixed integration,
  * then scores detection one mutant at a time.
  */
+import { loadDotEnv } from "../lib/core/env.js";
 import { formatMinor } from "../lib/core/money.js";
 import {
   MUTATION_IDS,
@@ -37,6 +38,8 @@ const DEFECT_SCENARIOS: Record<string, string> = {
 };
 
 async function main(): Promise<void> {
+  loadDotEnv();
+
   // ---- 0. Assemble the suite: fixed regression + AI-generated ------------
   const llm = llmFromEnv();
   const policy = loadPolicyFromFile();

@@ -2,7 +2,7 @@ import type { Clock } from "../core/clock.js";
 import type { IdFactory } from "../core/ids.js";
 import { FakePaymentProvider } from "./fake.js";
 import { type PaymentProvider, PaymentProviderError } from "./provider.js";
-import { RazorpayProvider } from "./razorpay.js";
+import { type CollectionMode, RazorpayProvider } from "./razorpay.js";
 
 export type PaymentAdapterKind = "fake" | "razorpay";
 
@@ -34,6 +34,8 @@ export type PaymentAdapterSelection =
 export function selectPaymentAdapter(deps: {
   ids: IdFactory;
   clock: Clock;
+  /** Razorpay only: create a hosted payment link instead of a bare order. */
+  collectionMode?: CollectionMode;
 }): PaymentAdapterSelection {
   const requested = (
     process.env.PAYMENT_ADAPTER ?? "fake"
@@ -76,7 +78,11 @@ export function selectPaymentAdapter(deps: {
     return {
       available: true,
       kind: "razorpay",
-      provider: new RazorpayProvider({ keyId, keySecret }),
+      provider: new RazorpayProvider({
+        keyId,
+        keySecret,
+        collectionMode: deps.collectionMode ?? "order",
+      }),
       keyId,
     };
   } catch (error) {
