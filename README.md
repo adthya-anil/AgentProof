@@ -28,7 +28,7 @@ an API key or network access unless you explicitly opt in.
 
 ```bash
 npm install
-npm test                    # 176 tests
+npm test                    # 193 tests
 npm run typecheck
 
 npm run demo:happy          # successful ₹1,399 transaction
@@ -233,6 +233,8 @@ upstream provider had a bad minute.
 
 | Route | Shows |
 |---|---|
+| `/hamperhub` | **The merchant under test**: catalog, tool surface, promotions |
+| `/hamperhub/agent` | **Watch a buyer agent shop**, live, on either integration |
 | `/` | Readiness, outcome counts, category coverage, journey table |
 | `/violations` | Findings split by responsibility (see below) |
 | `/journey/[id]` | Full replay: intent, tool calls, state changes, failed invariant |
@@ -245,6 +247,42 @@ in-process on request — deterministic and ~50ms — so the dashboard always sh
 run that just happened rather than a cached summary that may no longer match the
 code. Every page is a server component; the pages ship no client JavaScript, and
 there is no `next/font`, so the build needs no network.
+
+---
+
+## The merchant under test
+
+Everything else in the dashboard reports *on* AgentProof. `/hamperhub` shows the
+integration itself, because a report about an integration you cannot see is a
+report you have to take on trust.
+
+It renders the full catalog with live stock and floor prices, the six tools an AI
+buyer is handed with their real descriptions, and the promotions available. Tool
+descriptions are written the way a real merchant would write them, ambiguity
+included — nothing warns the agent about stacking limits or unpublished allergen
+data, because the point is to discover what an agent does when the documentation
+is merely adequate.
+
+Most importantly it makes tri-state product data **visible**. A product whose
+allergen field was never published is badged `not published`, which is plainly not
+the same as `none declared`. That difference is the entire basis of
+`INV-PRODUCT-SAFETY`, and on this page you can see it before any test runs.
+
+### Watch a buyer agent shop
+
+`/hamperhub/agent` runs a real journey on demand and shows the agent's tool calls,
+the quote it produced, and the Guard's verdict at every lifecycle checkpoint —
+then lets you rerun the **identical** buyer request against the other integration.
+
+That side-by-side is the most convincing artefact in the project. Ask for "every
+discount I qualify for" and the vulnerable integration produces an 8.7% quote that
+the Guard blocks; the fixed one completes. The buyer said exactly the same thing
+both times, so nothing about the failure can be blamed on a different input.
+
+Eight curated requests cover the demo narrative: the happy path, discount
+stacking, an allergic buyer meeting unpublished data, a retry after a payment
+timeout, stock vanishing after approval, a price rising after approval, a buyer
+pausing until the quote expires, and a checkout delivered twice.
 
 ---
 
@@ -581,7 +619,7 @@ src/lib/dashboard/              Server-side data layer for the dashboard
 src/app/                        Next.js dashboard (server components only)
 src/scripts/                    Runnable demos and database tooling
 scripts/dev-db.sh               Local Postgres for development
-tests/                          176 tests
+tests/                          193 tests
 ```
 
 Money is an integer count of paise throughout. Float rupees are banned: an
