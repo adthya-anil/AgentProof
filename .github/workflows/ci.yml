@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# The whole point of this workflow is to prove a central claim of the project:
+# AgentProof runs, tests and builds with no API keys and no network access to any
+# provider. No secrets are exposed to these jobs, so if anything here started
+# depending on a Razorpay or LLM credential, CI would fail rather than quietly
+# pass on a maintainer's configured machine.
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "24"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      - name: Build dashboard
+        run: npm run build
+
+      # Each demo asserts its own expected outcome and exits non-zero on
+      # failure, so running them is a genuine end-to-end check rather than a
+      # smoke test. `demo:razorpay` with no credentials must exit zero: the
+      # unconfigured path is a supported state, not an error.
+      - name: Demo — successful transaction
+        run: npm run demo:happy
+
+      - name: Demo — runtime block before payment
+        run: npm run demo:blocked
+
+      - name: Demo — seeded defect detection
+        run: npm run demo:defects
+
+      - name: Demo — preflight, fix-and-rerun, mutation scorecard
+        run: npm run demo:preflight
+
+      - name: Demo — Razorpay path is safe when unconfigured
+        run: npm run demo:razorpay
