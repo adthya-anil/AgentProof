@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { BuyerAgent } from "../agent/buyer.js";
 import type { LLM } from "../agent/llm.js";
-import { extractJson } from "../agent/llm.js";
+import { extractJson, LlmError } from "../agent/llm.js";
 import { encodeStrategy, type ScriptedStrategy } from "../agent/scripted.js";
 import { SEED_CATALOG } from "../hamperhub/catalog.js";
+import { describeAgentRun } from "./describeRun.js";
 import { PROMOS } from "../hamperhub/pricing.js";
 import { TOOL_DECLARATIONS } from "../hamperhub/tools.js";
 import type { Policy } from "../policy/schema.js";
@@ -73,37 +74,43 @@ export interface GenerateOptions {
 }
 
 /**
- * Produces runnable scenarios.
+ * Produces runnable scenarios by asking a real model for buyer goals.
  *
- * With the scripted LLM this returns the fixed catalogue below. With a real LLM
- * it asks the model for goals, validates and dedupes them, and wraps each so the
- * adaptive agent executes it. If the real model errors or returns nothing usable,
- * it falls back to the scripted set rather than failing the run.
+ * **Never silently substitutes a scripted set.** It used to: a generator hiccup
+ * fell back to the fixed catalogue so a run could not be aborted by a provider
+ * blip. That traded a loud failure for a quiet lie — the report went on saying
+ * "9 AI-generated" while the model had contributed nothing, and the one thing a
+ * readiness report must never do is misstate where its evidence came from.
+ *
+ * So a generation failure is now a generation failure. The caller sees the
+ * provider's actual error and decides; the scripted catalogue is reachable only
+ * by explicitly asking for a scripted model.
  */
 export async function generateScenarios(
   options: GenerateOptions,
 ): Promise<Scenario[]> {
   const target = options.count ?? 12;
+  if (target === 0) return [];
 
   if (!options.llm.isReal) {
+    // Reached only when someone set LLM_ADAPTER=scripted on purpose — CI with no
+    // key, or a deliberately reproducible demo. Not a fallback.
     return SCRIPTED_GENERATED.slice(0, target).map((g) =>
       toScenario(g, options),
     );
   }
 
-  try {
-    const generated = await generateWithLlm(options, target);
-    if (generated.length === 0) {
-      return SCRIPTED_GENERATED.slice(0, target).map((g) =>
-        toScenario(g, options),
-      );
-    }
-    return generated.map((g) => toScenario(g, options));
-  } catch {
-    // A generator hiccup must never abort preflight; the scripted set is a safe,
-    // still-useful floor.
-    return SCRIPTED_GENERATED.slice(0, target).map((g) => toScenario(g, options));
+  const generated = await generateWithLlm(options, target);
+  if (generated.length === 0) {
+    throw new LlmError(
+      `${options.llm.name} returned no usable scenarios. Every candidate failed ` +
+        "schema validation or was a duplicate. Nothing was substituted — rerun, " +
+        "or set generated=0 to run without an AI-generated half.",
+      "provider",
+      true,
+    );
   }
+  return generated.map((g) => toScenario(g, options));
 }
 
 async function generateWithLlm(
@@ -240,25 +247,7 @@ function toScenario(
         systemSuffix: suffix,
         maxToolCalls: options.maxToolCalls ?? 24,
       });
-      const result = await agent.run(c.intent);
-      const last = result.transcript[result.transcript.length - 1];
-      return {
-        completed: result.reachedCheckout,
-        note:
-          `${result.transcript.length} tool calls; ` +
-          `${result.stopReason}` +
-          (last && !last.ok ? ` — last ${last.tool}: ${last.summary}` : ""),
-        // Surfaced so the runner can distinguish a merchant self-rejection from
-        // a Guard block, exactly as it does for the scripted regression suite.
-        lastResult: result.lastResult,
-        model: result.model,
-        // An exhausted budget or a model error decided nothing. Do not let it
-        // pass for a safe rejection.
-        inconclusive:
-          !result.reachedCheckout &&
-          (result.stopReason === "max_tool_calls" ||
-            result.stopReason === "llm_error"),
-      };
+      return describeAgentRun(await agent.run(c.intent));
     },
   };
 }

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AnthropicLLM } from "../src/lib/agent/anthropic.js";
 import { LlmError } from "../src/lib/agent/llm.js";
-import { llmPoolFromEnv } from "../src/lib/agent/factory.js";
+import { llmPoolFromEnv, requireLlmPool } from "../src/lib/agent/factory.js";
 
 /**
  * Wire-level tests for the Anthropic adapter.
@@ -25,10 +25,15 @@ interface Capture {
   body: Record<string, unknown>;
 }
 
+interface StubResponse {
+  status?: number;
+  json: unknown;
+  /** Response headers, e.g. `retry-after`. */
+  headers?: Record<string, string>;
+}
+
 /** Replaces fetch with a queue of canned responses, recording each request. */
-function stubFetch(
-  responses: Array<{ status?: number; json: unknown }>,
-): Capture[] {
+function stubFetch(responses: StubResponse[]): Capture[] {
   const captured: Capture[] = [];
   let call = 0;
 
@@ -43,11 +48,43 @@ function stubFetch(
     return {
       ok: (response.status ?? 200) < 400,
       status: response.status ?? 200,
+      // Real, not a bare object: the adapter reads `Retry-After` off this, and a
+      // stub without it made every failure look like a network error.
+      headers: new Headers(response.headers ?? {}),
       text: async () => JSON.stringify(response.json),
     };
   }) as unknown as typeof fetch;
 
   return captured;
+}
+
+/**
+ * The request timeout used by backoff tests.
+ *
+ * Distinctive so it can be told apart from a retry delay. The adapter arms an
+ * abort timer per request as well as sleeping between retries, and both go through
+ * `setTimeout` — without separating them, an assertion about backoff silently
+ * measures the 120s abort timer instead.
+ */
+const PROBE_TIMEOUT_MS = 111_111;
+
+/**
+ * Runs `fn` while recording intended retry delays, firing each immediately so a
+ * test asserting a 30-second wait still finishes instantly.
+ */
+async function recordBackoffs(fn: () => Promise<unknown>): Promise<number[]> {
+  const waits: number[] = [];
+  const realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = ((cb: () => void, ms?: number) => {
+    if (ms !== PROBE_TIMEOUT_MS) waits.push(ms ?? 0);
+    return realSetTimeout(cb, 0);
+  }) as unknown as typeof globalThis.setTimeout;
+  try {
+    await fn();
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+  }
+  return waits;
 }
 
 function textReply(text: string) {
@@ -60,12 +97,24 @@ function textReply(text: string) {
   };
 }
 
-function build(overrides: Partial<{ model: string; baseUrl: string }> = {}) {
+function build(
+  overrides: Partial<{
+    model: string;
+    baseUrl: string;
+    maxRetries: number;
+    timeoutMs: number;
+  }> = {},
+) {
   return new AnthropicLLM({
     apiKey: "test-key",
     model: overrides.model ?? "claude-opus-5",
     baseUrl: overrides.baseUrl ?? "https://example.invalid/anthropic",
-    maxRetries: 0,
+    // Zero by default so a mapping test cannot pass by accident on a retry.
+    // Backoff tests opt in.
+    maxRetries: overrides.maxRetries ?? 0,
+    ...(overrides.timeoutMs !== undefined
+      ? { timeoutMs: overrides.timeoutMs }
+      : {}),
   });
 }
 
@@ -335,6 +384,98 @@ describe("provider quirks", () => {
     ).rejects.toMatchObject({ kind: "config", retryable: false });
   });
 
+  /**
+   * A 429 needs a completely different wait from a transient blip.
+   *
+   * Measured: exponential backoff from 500ms lost two perturbation journeys in a
+   * single suite, because Azure meters this deployment per minute and both retries
+   * landed inside the same window.
+   */
+  it("marks a 429 as rate limited and reads Retry-After", async () => {
+    stubFetch([
+      {
+        status: 429,
+        headers: { "retry-after": "30" },
+        json: { error: { message: "Rate limit of 40000 per 60s exceeded" } },
+      },
+    ]);
+
+    await expect(
+      new AnthropicLLM({
+        apiKey: "k",
+        model: "claude-opus-5",
+        maxRetries: 0,
+      }).complete({ system: "s", messages: [] }),
+    ).rejects.toMatchObject({
+      rateLimited: true,
+      retryable: true,
+      retryAfterMs: 30_000,
+    });
+  });
+
+  it("waits the window out instead of retrying inside it", async () => {
+    stubFetch([
+      {
+        status: 429,
+        headers: { "retry-after": "12" },
+        json: { error: { message: "slow down" } },
+      },
+      textReply("ok"),
+    ]);
+
+    const llm = build({ maxRetries: 2, timeoutMs: PROBE_TIMEOUT_MS });
+    const waits = await recordBackoffs(() =>
+      llm.complete({ system: "s", messages: [] }),
+    );
+
+    // 12s from the header, not 0.5s from a blind exponential.
+    expect(Math.max(...waits)).toBeGreaterThanOrEqual(12_000);
+  });
+
+  it("assumes a per-minute window when a 429 gives no hint", async () => {
+    stubFetch([
+      { status: 429, json: { error: { message: "too many requests" } } },
+      textReply("ok"),
+    ]);
+
+    const llm = build({ maxRetries: 2, timeoutMs: PROBE_TIMEOUT_MS });
+    const waits = await recordBackoffs(() =>
+      llm.complete({ system: "s", messages: [] }),
+    );
+    expect(Math.max(...waits)).toBeGreaterThanOrEqual(20_000);
+  });
+
+  it("still backs off fast for an ordinary transient failure", async () => {
+    stubFetch([
+      { status: 503, json: { error: { message: "upstream unavailable" } } },
+      textReply("ok"),
+    ]);
+
+    const llm = build({ maxRetries: 2, timeoutMs: PROBE_TIMEOUT_MS });
+    const waits = await recordBackoffs(() =>
+      llm.complete({ system: "s", messages: [] }),
+    );
+    // A 503 is not a rate limit; waiting a minute for one would be absurd.
+    expect(Math.max(...waits)).toBeLessThan(5_000);
+  });
+
+  it("caps the wait so one journey cannot stall a whole suite", async () => {
+    stubFetch([
+      {
+        status: 429,
+        headers: { "retry-after": "3600" },
+        json: { error: { message: "come back in an hour" } },
+      },
+      textReply("ok"),
+    ]);
+
+    const llm = build({ maxRetries: 2, timeoutMs: PROBE_TIMEOUT_MS });
+    const waits = await recordBackoffs(() =>
+      llm.complete({ system: "s", messages: [] }),
+    );
+    expect(Math.max(...waits)).toBeLessThanOrEqual(70_000);
+  });
+
   it("refuses to construct without a key", () => {
     expect(
       () => new AnthropicLLM({ apiKey: "", model: "claude-opus-5" }),
@@ -343,15 +484,30 @@ describe("provider quirks", () => {
 });
 
 describe("the model pool", () => {
-  it("is the scripted model when nothing real is configured", () => {
+  /**
+   * Empty, not scripted.
+   *
+   * This used to hand back a `ScriptedLLM` so a run always had something to
+   * execute. That made an unconfigured environment indistinguishable from a
+   * working one: the run proceeded, the report looked normal, and every "live
+   * agent" journey in it was a replayed script.
+   */
+  it("is empty when nothing real is configured", () => {
     vi.stubEnv("LLM_ADAPTER", "scripted");
     vi.stubEnv("LLM_API_KEY", "");
     vi.stubEnv("ANTHROPIC_MODEL", "");
     vi.stubEnv("ANTHROPIC_API_KEY", "");
 
-    const pool = llmPoolFromEnv();
-    expect(pool).toHaveLength(1);
-    expect(pool[0]!.isReal).toBe(false);
+    expect(llmPoolFromEnv()).toEqual([]);
+  });
+
+  it("explains itself when a caller requires a pool and there is none", () => {
+    vi.stubEnv("LLM_ADAPTER", "scripted");
+    vi.stubEnv("LLM_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_MODEL", "");
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+
+    expect(() => requireLlmPool()).toThrow(/Nothing is substituted/);
   });
 
   it("holds both families when both are configured on one key", () => {

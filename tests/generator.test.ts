@@ -173,29 +173,61 @@ describe("generateScenarios with a real model", () => {
     expect(result.error).toBeNull();
   });
 
-  it("falls back to the scripted set when the model errors", async () => {
+  /**
+   * Generation failures must surface, never be papered over.
+   *
+   * These three used to assert the opposite: a provider error, unusable JSON or an
+   * empty list each fell back to the scripted catalogue so a run could not be
+   * aborted by a blip. The cost was a report that went on claiming "9
+   * AI-generated" while the model had contributed nothing — a readiness report
+   * misstating where its own evidence came from. Loud failure is the cheaper
+   * mistake.
+   */
+  it("throws rather than substituting scripts when the model errors", async () => {
     const llm = fakeRealLlm(() => {
       throw new Error("upstream down");
     });
-    const scenarios = await generateScenarios({ llm, policy, count: 6 });
-    expect(scenarios).toHaveLength(6);
-    expect(scenarios[0]?.id).toBe(`gen-${SCRIPTED_GENERATED[0]!.id}`);
+    await expect(
+      generateScenarios({ llm, policy, count: 6 }),
+    ).rejects.toThrow(/upstream down/);
   });
 
-  it("falls back when the model returns unusable JSON", async () => {
+  it("throws rather than substituting scripts on unusable JSON", async () => {
     const llm = fakeRealLlm(() => ({
       content: "I would rather not.",
       toolCalls: [],
       model: "stub",
     }));
-    const scenarios = await generateScenarios({ llm, policy, count: 4 });
-    expect(scenarios).toHaveLength(4);
+    await expect(
+      generateScenarios({ llm, policy, count: 4 }),
+    ).rejects.toThrow(/No JSON found/);
   });
 
-  it("falls back when the model returns an empty scenario list", async () => {
+  it("throws rather than substituting scripts on an empty scenario list", async () => {
     const llm = fakeRealLlm(() => json({ scenarios: [] }));
-    const scenarios = await generateScenarios({ llm, policy, count: 5 });
-    expect(scenarios).toHaveLength(5);
+    await expect(generateScenarios({ llm, policy, count: 5 })).rejects.toThrow(
+      /Nothing was substituted/,
+    );
+  });
+
+  it("never reaches the scripted catalogue with a real model", async () => {
+    const llm = fakeRealLlm(() => json({ scenarios: [] }));
+    // The specific guarantee: no scripted id can appear in a real-model run, so
+    // a scripted journey can never be mistaken for a generated one.
+    const scripted = new Set(SCRIPTED_GENERATED.map((g) => `gen-${g.id}`));
+    await expect(generateScenarios({ llm, policy, count: 5 })).rejects.toThrow();
+    expect(scripted.size).toBeGreaterThan(0);
+  });
+
+  it("asks for nothing and returns nothing when count is zero", async () => {
+    let called = false;
+    const llm = fakeRealLlm(() => {
+      called = true;
+      return json({ scenarios: [] });
+    });
+    expect(await generateScenarios({ llm, policy, count: 0 })).toEqual([]);
+    // No model call, so generated=0 costs neither tokens nor a failure.
+    expect(called).toBe(false);
   });
 });
 

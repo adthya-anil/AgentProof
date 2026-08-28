@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
-import type { CompletionResult, LLM } from "../src/lib/agent/llm.js";
+import { type CompletionResult, type LLM, LlmError } from "../src/lib/agent/llm.js";
 import { ScriptedLLM } from "../src/lib/agent/scripted.js";
 import { MutationSet } from "../src/lib/hamperhub/mutations.js";
 import { loadPolicyFromFile } from "../src/lib/policy/load.js";
 import { runScenario, runSuite } from "../src/lib/runner/run.js";
 import { agentDrivenScenarios } from "../src/lib/scenarios/agentDriven.js";
 import { assembleSuite } from "../src/lib/scenarios/index.js";
-import { PERTURBATION_SCENARIOS } from "../src/lib/scenarios/perturbations.js";
+import {
+  PERTURBATION_SCENARIOS,
+  perturbationScenarios,
+} from "../src/lib/scenarios/perturbations.js";
 import { REGRESSION_SCENARIOS } from "../src/lib/scenarios/regression.js";
 
 /**
@@ -249,7 +252,116 @@ describe("suite composition", () => {
       mode: "agent",
     });
     expect(suite.regressionCount).toBe(0);
+    // No real model, so there are no agent-driven perturbations to run — and the
+    // scripted ones are not offered as a consolation prize.
     expect(suite.perturbationCount).toBe(0);
     expect(suite.scenarios.every((s) => s.driver === "agent")).toBe(true);
+  });
+});
+
+describe("nothing is ever silently swapped for a script", () => {
+  /** A real-looking model whose every call fails. */
+  const brokenReal: LLM = {
+    name: "openai:broken",
+    isReal: true,
+    async complete() {
+      throw new LlmError("provider exploded", "provider", false);
+    },
+  };
+
+  it("propagates a generation failure instead of assembling a scripted suite", async () => {
+    await expect(
+      assembleSuite({
+        llm: brokenReal,
+        policy: loadPolicyFromFile(),
+        generatedCount: 3,
+        mode: "both",
+      }),
+    ).rejects.toThrow(/provider exploded/);
+  });
+
+  it("drives perturbations with the real model, not a scripted strategy", () => {
+    const scenarios = perturbationScenarios([
+      { name: "openai:a", isReal: true, complete: brokenReal.complete },
+    ]);
+    expect(scenarios).toHaveLength(PERTURBATION_SCENARIOS.length);
+    for (const scenario of scenarios) {
+      expect(scenario.driver).toBe("agent");
+      expect(scenario.assignedModel).toBe("openai:a");
+      // The fault it targets is preserved — that is the whole point of §7C.
+      expect(scenario.perturbation).toBeDefined();
+    }
+  });
+
+  it("reports inconclusive when a perturbation never got to fire", async () => {
+    // A model that stops immediately never reaches create_checkout, so the
+    // duplicate-delivery fault is never injected and the journey proves nothing.
+    const quitter: LLM = {
+      name: "openai:quits",
+      isReal: true,
+      async complete() {
+        return { content: "I would rather not.", toolCalls: [], model: "quits" };
+      },
+    };
+    const scenario = perturbationScenarios([quitter]).find((s) =>
+      s.id.startsWith("pert-02"),
+    )!;
+
+    const journey = await runScenario(scenario, {
+      mutations: MutationSet.vulnerable(),
+    });
+
+    expect(journey.perturbations).toHaveLength(0);
+    expect(journey.disposition).toBe("inconclusive");
+    expect(journey.note).toMatch(/perturbation never fired/);
+  });
+
+  /**
+   * A perturbation whose own buyer request stops the agent short is untestable.
+   *
+   * `pert-01` used to say "I'll think about it before confirming". The agent is
+   * instructed never to self-approve without authorisation, so a real model
+   * correctly halted at the quote and the `create_checkout` fault was never
+   * injected — the scenario could not exercise the thing it existed to exercise.
+   * The scripted driver masked it by forcing the steps.
+   */
+  it("never asks an agent to reach a tool the buyer forbade it from reaching", () => {
+    const needsPurchase = /\b(go ahead|please buy|buy it|order|purchase|complete)\b/i;
+    const refusesToCommit = /\b(think about it|before confirming|check back with me)\b/i;
+
+    // Every fault here lands at or after approval, and approval is the step an
+    // unauthorised agent refuses. So all four need explicit consent.
+    const gated = new Set(["approve_quote", "create_checkout"]);
+
+    for (const scenario of PERTURBATION_SCENARIOS) {
+      const p = scenario.perturbation;
+      const touchesGatedTool =
+        (p?.delay?.tool !== undefined && gated.has(p.delay.tool)) ||
+        (p?.duplicate?.tool !== undefined && gated.has(p.duplicate.tool)) ||
+        (p?.replay?.replay !== undefined && gated.has(p.replay.replay)) ||
+        (p?.replay?.after !== undefined && gated.has(p.replay.after));
+      if (!touchesGatedTool) continue;
+
+      const utterance = scenario.intent.utterance;
+      expect(utterance, `${scenario.id} must authorise a purchase`).toMatch(
+        needsPurchase,
+      );
+      expect(
+        utterance,
+        `${scenario.id} withholds consent, so checkout is unreachable`,
+      ).not.toMatch(refusesToCommit);
+    }
+  });
+
+  it("still fires the perturbation when the agent does reach the tool", async () => {
+    // The scripted set always reaches its target, so it is the control case.
+    const scenario = PERTURBATION_SCENARIOS.find((s) =>
+      s.id.startsWith("pert-02"),
+    )!;
+    const journey = await runScenario(scenario, {
+      mutations: MutationSet.vulnerable(),
+    });
+    expect(journey.perturbations.length).toBeGreaterThan(0);
+    expect(journey.disposition).not.toBe("inconclusive");
   });
 });

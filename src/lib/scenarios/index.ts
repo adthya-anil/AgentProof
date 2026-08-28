@@ -2,7 +2,10 @@ import type { LLM } from "../agent/llm.js";
 import type { Policy } from "../policy/schema.js";
 import { agentDrivenScenarios } from "./agentDriven.js";
 import { generateScenarios } from "./generate.js";
-import { PERTURBATION_SCENARIOS } from "./perturbations.js";
+import {
+  PERTURBATION_SCENARIOS,
+  perturbationScenarios,
+} from "./perturbations.js";
 import { REGRESSION_SCENARIOS } from "./regression.js";
 import type { Scenario } from "./types.js";
 
@@ -79,31 +82,51 @@ export async function assembleSuite(
   // run. The live-agent half roughly doubles the suite and takes minutes against
   // a real model, so it is opted into rather than inherited.
   const mode = options.mode ?? "deterministic";
-  const deterministic =
-    mode === "agent"
-      ? []
-      : [...REGRESSION_SCENARIOS, ...PERTURBATION_SCENARIOS];
+  const pool =
+    options.llms && options.llms.length > 0 ? options.llms : [options.llm];
+  const realPool = pool.filter((llm) => llm.isReal);
+
+  /**
+   * Perturbations follow the mode, and are never substituted across it.
+   *
+   * `deterministic` gets the scripted set. A live mode gets the same faults driven
+   * by real models with no strategy hint — a transport fault around a journey the
+   * model actually chose.
+   *
+   * `agent` mode with no real model gets **nothing**. Handing back the scripted
+   * set there would be precisely the silent substitution this refactor removes:
+   * the caller asked for live agents, and four replayed scripts labelled
+   * `deterministic` is not a smaller version of that, it is a different thing
+   * wearing its name.
+   */
+  const perturbations =
+    mode === "deterministic"
+      ? PERTURBATION_SCENARIOS
+      : realPool.length > 0
+        ? perturbationScenarios(realPool)
+        : [];
+
+  const deterministic = mode === "agent" ? [] : REGRESSION_SCENARIOS;
   const live =
     mode === "deterministic"
       ? []
       : agentDrivenScenarios({
-          llms:
-            options.llms && options.llms.length > 0 ? options.llms : [options.llm],
+          llms: pool,
           maxToolCalls: options.maxToolCalls ?? 24,
           only: options.liveGoals,
         });
 
   return {
-    scenarios: [...deterministic, ...live, ...generated],
-    regressionCount: mode === "agent" ? 0 : REGRESSION_SCENARIOS.length,
-    perturbationCount: mode === "agent" ? 0 : PERTURBATION_SCENARIOS.length,
+    scenarios: [...deterministic, ...perturbations, ...live, ...generated],
+    regressionCount: deterministic.length,
+    perturbationCount: perturbations.length,
     liveCount: live.length,
     generatedCount: generated.length,
     generatorModel: options.llm.name,
     generatorIsReal: options.llm.isReal,
     driverModels: [
       ...new Set(
-        [...live, ...generated]
+        [...perturbations, ...live, ...generated]
           .map((s) => s.assignedModel)
           .filter((name): name is string => Boolean(name)),
       ),
@@ -112,7 +135,10 @@ export async function assembleSuite(
 }
 
 export { REGRESSION_SCENARIOS, REGRESSION_GOALS, scenarioById } from "./regression.js";
-export { PERTURBATION_SCENARIOS } from "./perturbations.js";
+export {
+  PERTURBATION_SCENARIOS,
+  perturbationScenarios,
+} from "./perturbations.js";
 export { agentDrivenScenarios } from "./agentDriven.js";
 export { generateScenarios, SCRIPTED_GENERATED } from "./generate.js";
 export type {

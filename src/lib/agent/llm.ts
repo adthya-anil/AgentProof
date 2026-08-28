@@ -78,13 +78,29 @@ export interface LLM {
 }
 
 export class LlmError extends Error {
+  /**
+   * True for a 429.
+   *
+   * Distinguished from other retryable failures because it needs a completely
+   * different wait: providers meter per minute, so the sub-second backoff that
+   * suits a transient blip guarantees the retry lands inside the same window.
+   */
+  readonly rateLimited: boolean;
+  /** The server's own `Retry-After`, in ms, when it sent one. */
+  readonly retryAfterMs?: number;
+
   constructor(
     message: string,
     readonly kind: "config" | "network" | "provider" | "parse",
     readonly retryable: boolean,
+    options: { rateLimited?: boolean; retryAfterMs?: number } = {},
   ) {
     super(message);
     this.name = "LlmError";
+    this.rateLimited = options.rateLimited ?? false;
+    if (options.retryAfterMs !== undefined) {
+      this.retryAfterMs = options.retryAfterMs;
+    }
   }
 }
 

@@ -56,7 +56,8 @@ export class OpenAICompatibleLLM implements LLM {
      * lying about what produced the suite.
      */
     this.timeoutMs = config.timeoutMs ?? 120_000;
-    this.maxRetries = config.maxRetries ?? 2;
+    // Three, so a journey that hits a per-minute window twice still has a try left.
+    this.maxRetries = config.maxRetries ?? 3;
   }
 
   /**
@@ -209,9 +210,8 @@ export class OpenAICompatibleLLM implements LLM {
       } catch (error) {
         lastError = error;
         if (error instanceof LlmError && !error.retryable) throw error;
-        if (attempt < this.maxRetries) {
-          await sleep(250 * 2 ** attempt);
-        }
+        if (attempt >= this.maxRetries) break;
+        await sleep(backoffMs(error, attempt));
       }
     }
     throw lastError;
@@ -232,12 +232,19 @@ export class OpenAICompatibleLLM implements LLM {
       });
       const text = await response.text();
       if (!response.ok) {
+        const retryAfterMs = parseRetryAfter(
+          response.headers.get("retry-after"),
+        );
         throw new LlmError(
           `LLM request failed with ${response.status}: ${text.slice(0, 300)}`,
           response.status === 401 || response.status === 403
             ? "config"
             : "provider",
           response.status === 429 || response.status >= 500,
+          {
+            rateLimited: response.status === 429,
+            ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+          },
         );
       }
       return JSON.parse(text) as Record<string, unknown>;
@@ -263,4 +270,39 @@ export class OpenAICompatibleLLM implements LLM {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Never stall a whole suite on one rate-limited journey. */
+const RATE_LIMIT_MAX_WAIT_MS = 70_000;
+
+/**
+ * How long to wait before retrying.
+ *
+ * Sub-second backoff is right for a blip and wrong for a rate limit: these
+ * deployments meter per minute, so retrying twice inside a second spends both
+ * attempts in the same window and loses the journey. A 429 waits the window out,
+ * preferring the server's own `Retry-After`.
+ */
+function backoffMs(error: unknown, attempt: number): number {
+  const retryAfter = error instanceof LlmError ? error.retryAfterMs : undefined;
+  if (retryAfter !== undefined) {
+    return Math.min(retryAfter + 500, RATE_LIMIT_MAX_WAIT_MS);
+  }
+  if (error instanceof LlmError && error.rateLimited) {
+    return Math.min(20_000 * (attempt + 1), RATE_LIMIT_MAX_WAIT_MS);
+  }
+  return 250 * 2 ** attempt;
+}
+
+/** `Retry-After` is either a seconds count or an HTTP date. */
+function parseRetryAfter(header: string | null): number | undefined {
+  if (!header) return undefined;
+
+  const seconds = Number(header.trim());
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+
+  const date = Date.parse(header);
+  if (!Number.isNaN(date)) return Math.max(0, date - Date.now());
+
+  return undefined;
 }

@@ -1,5 +1,6 @@
 import { BuyerAgent } from "../agent/buyer.js";
 import type { LLM } from "../agent/llm.js";
+import { describeAgentRun } from "./describeRun.js";
 import { REGRESSION_GOALS } from "./regression.js";
 import type { Scenario, ScenarioContext, ScenarioOutcome } from "./types.js";
 
@@ -84,51 +85,13 @@ export function agentDrivenScenarios(
             maxToolCalls: options.maxToolCalls ?? 24,
           });
 
-          const run = await agent.run(c.intent);
-          const last = run.transcript[run.transcript.length - 1];
-
-          return {
-            completed: run.reachedCheckout,
-            note:
-              `${run.transcript.length} tool calls; ${describeStop(run)}` +
-              (last && !last.ok ? ` — last ${last.tool}: ${last.summary}` : ""),
-            lastResult: run.lastResult,
-            // What answered, not what we asked for.
-            model: run.model,
-            // Ran out of road rather than being decided by anything.
-            inconclusive:
-              !run.reachedCheckout &&
-              (run.stopReason === "max_tool_calls" ||
-                run.stopReason === "llm_error"),
-          };
+          return describeAgentRun(await agent.run(c.intent));
         },
       });
     }
   }
 
   return scenarios;
-}
-
-/**
- * Says who ended the journey, in plain words.
- *
- * `no_tool_call` is doing double duty in the raw stop reason: it covers both an
- * agent that voluntarily stopped to ask the buyer for approval — a good outcome —
- * and one that gave up after being blocked. A reader should not have to reverse-
- * engineer which from a tool count.
- */
-function describeStop(run: {
-  stopReason: string;
-  reachedCheckout: boolean;
-  lastResult?: { ok: boolean };
-}): string {
-  if (run.reachedCheckout) return "completed";
-  if (run.stopReason === "no_tool_call") {
-    return run.lastResult && !run.lastResult.ok
-      ? "agent stopped after a block"
-      : "agent declined to proceed";
-  }
-  return run.stopReason;
 }
 
 function resolvePool(options: AgentDrivenOptions): readonly LLM[] {
