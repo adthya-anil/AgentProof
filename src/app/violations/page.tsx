@@ -1,6 +1,6 @@
 import { formatMinor } from "@/lib/core/money";
 import { getSuiteView, type IntegrationVariant } from "@/lib/dashboard/data";
-import { Tabs, ViolationCard, VariantSwitcher } from "../components";
+import { NoRunYet, Tabs, ViolationCard, VariantSwitcher } from "../components";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +15,18 @@ export default async function ViolationsPage({
 }) {
   const params = await searchParams;
   const variant = parseVariant(params.integration);
-  const { suite } = await getSuiteView(variant);
+  const view = getSuiteView(variant);
+
+  if (!view) {
+    return (
+      <>
+        <Tabs active="violations" variant={variant} />
+        <VariantSwitcher variant={variant} basePath="/violations" />
+        <NoRunYet variant={variant} />
+      </>
+    );
+  }
+  const { suite } = view;
 
   const defects = suite.journeys.flatMap((journey) =>
     journey.integrationDefects.map((violation) => ({ journey, violation })),

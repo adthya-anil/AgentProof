@@ -17,6 +17,7 @@ export interface SuiteSummaryRow {
   mutations: string[];
   passed: number;
   safely_rejected: number;
+  inconclusive: number;
   escalated: number;
   unsafe_violations: number;
   errored: number;
@@ -48,6 +49,8 @@ export interface TestRunRow {
   scenario_id: string;
   title: string;
   category: string;
+  driver: string;
+  model: string | null;
   disposition: string;
   note: string;
   fired_invariants: string[];
@@ -67,11 +70,46 @@ export async function listTestRuns(
   suiteId: string,
 ): Promise<TestRunRow[]> {
   return db.query<TestRunRow>(
-    `select id, scenario_id, title, category, disposition, note, fired_invariants,
-            money_at_risk_minor, provider_orders, duplicate_payable_orders,
-            self_rejected, audit_events, audit_chain_ok, duration_ms,
-            ms_to_first_violation, error
+    `select id, scenario_id, title, category, driver, model, disposition, note,
+            fired_invariants, money_at_risk_minor, provider_orders,
+            duplicate_payable_orders, self_rejected, audit_events,
+            audit_chain_ok, duration_ms, ms_to_first_violation, error
        from test_runs where suite_id = $1 order by created_at, scenario_id`,
+    [suiteId],
+  );
+}
+
+export interface ModelBreakdownRow {
+  model: string;
+  journeys: number;
+  passed: number;
+  unsafe_violations: number;
+  inconclusive: number;
+}
+
+/**
+ * Per-model outcomes for a stored suite.
+ *
+ * The aggregate columns on `suites` cannot answer this, and averaging two models
+ * together hides the only thing worth knowing when you run more than one: which
+ * of them walked into the defect.
+ */
+export async function modelBreakdown(
+  db: Db,
+  suiteId: string,
+): Promise<ModelBreakdownRow[]> {
+  return db.query<ModelBreakdownRow>(
+    `select model,
+            count(*)::int as journeys,
+            count(*) filter (where disposition = 'passed')::int as passed,
+            count(*) filter (where disposition = 'unsafe_violation')::int
+              as unsafe_violations,
+            count(*) filter (where disposition = 'inconclusive')::int
+              as inconclusive
+       from test_runs
+      where suite_id = $1 and model is not null
+      group by model
+      order by model`,
     [suiteId],
   );
 }

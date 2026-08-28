@@ -5,10 +5,14 @@
  * generating scenarios — but neither should depend on a specific provider or on
  * the network being reachable. This interface is the seam.
  *
- * Two implementations back it: a `ScriptedLLM` that is fully deterministic and
- * needs no key (so demos, tests and CI are reproducible byte-for-byte), and an
- * `OpenAICompatibleLLM` that calls a real chat-completions endpoint when a key
- * is configured. The rest of the codebase cannot tell which is in use.
+ * Three implementations back it: a `ScriptedLLM` that is fully deterministic and
+ * needs no key (so demos, tests and CI are reproducible byte-for-byte), an
+ * `OpenAICompatibleLLM` for any chat-completions endpoint, and an `AnthropicLLM`
+ * for the Messages API. The rest of the codebase cannot tell which is in use.
+ *
+ * Two real families is not redundancy. The agents that will actually shop a
+ * merchant's store are not all one model, so a preflight run that only ever sends
+ * one is testing a narrower world than the one the merchant ships into.
  */
 
 export type ChatRole = "system" | "user" | "assistant" | "tool";
@@ -21,6 +25,17 @@ export interface ChatMessage {
   /** Present on tool messages: which call this responds to. */
   toolCallId?: string;
   name?: string;
+  /**
+   * The provider's own representation of this turn, opaque to everything except
+   * the adapter that produced it.
+   *
+   * This exists because some providers cannot losslessly rebuild an assistant
+   * turn from the neutral shape above. Anthropic's reasoning models emit a signed
+   * `thinking` block alongside a tool call, and reconstructing the turn without it
+   * throws away the reasoning chain mid-purchase. The adapter round-trips its own
+   * blocks through here; nothing else may read it.
+   */
+  providerRaw?: unknown;
 }
 
 export interface LlmToolCall {
@@ -51,6 +66,8 @@ export interface CompletionResult {
   toolCalls: LlmToolCall[];
   /** Provider/model that produced this, surfaced in the report. */
   model: string;
+  /** See `ChatMessage.providerRaw`. Echo it back on the next turn, untouched. */
+  providerRaw?: unknown;
 }
 
 export interface LLM {

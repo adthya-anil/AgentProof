@@ -1,5 +1,6 @@
 import { formatMinor } from "@/lib/core/money";
-import { getSuiteView } from "@/lib/dashboard/data";
+import { loadPolicyFromFile } from "@/lib/policy/load";
+import { describeEngine } from "@/lib/dashboard/data";
 import { ALL_INVARIANTS } from "@/lib/policy/invariants/index";
 import { Tabs } from "../components";
 
@@ -12,9 +13,9 @@ export const dynamic = "force-dynamic";
  * names the policy keys it enforces, so a reviewer can trace any verdict back to
  * a rule the merchant approved.
  */
-export default async function PolicyPage() {
-  const { info } = await getSuiteView("fixed");
-  const policy = info.policy;
+export default function PolicyPage() {
+  const engine = describeEngine();
+  const policy = loadPolicyFromFile();
 
   return (
     <>
@@ -29,7 +30,7 @@ export default async function PolicyPage() {
           </div>
           <div>
             <span>Content-addressed version</span>
-            <code>{info.policyVersion}</code>
+            <code>{engine.policyVersion}</code>
           </div>
           <div>
             <span>Currency</span>

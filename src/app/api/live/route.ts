@@ -54,6 +54,9 @@ export async function GET(request: Request): Promise<Response> {
           requireVegan: url.searchParams.get("vegan") === "1",
           mustAvoidAllergens: allergens,
           offlinePayments,
+          ...(url.searchParams.get("model")
+            ? { model: url.searchParams.get("model")! }
+            : {}),
         },
         send,
       );

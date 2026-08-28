@@ -82,6 +82,7 @@ export function createEnvironment(opts: EnvironmentOptions = {}): Environment {
     state,
     audit,
     mode: opts.mode ?? "preflight",
+    paymentProvider: { name: payments.name, isReal: payments.isReal },
   });
 
   return {

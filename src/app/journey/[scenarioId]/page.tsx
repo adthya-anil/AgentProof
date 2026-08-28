@@ -5,6 +5,7 @@ import { getJourney, type IntegrationVariant } from "@/lib/dashboard/data";
 import {
   ChainStatus,
   DispositionBadge,
+  DriverBadge,
   Tabs,
   Trace,
   ViolationCard,
@@ -31,7 +32,7 @@ export default async function JourneyPage({
 }) {
   const [{ scenarioId }, query] = await Promise.all([params, searchParams]);
   const variant = parseVariant(query.integration);
-  const journey = await getJourney(variant, decodeURIComponent(scenarioId));
+  const journey = getJourney(variant, decodeURIComponent(scenarioId));
 
   if (!journey) notFound();
 
@@ -73,6 +74,16 @@ export default async function JourneyPage({
             <span>Outcome</span>
             <DispositionBadge value={journey.disposition} />
           </div>
+          <div>
+            <span>Driven by</span>
+            <DriverBadge value={journey.driver} />
+          </div>
+          {journey.model && (
+            <div>
+              <span>Model</span>
+              <code>{journey.model}</code>
+            </div>
+          )}
           <div>
             <span>Category</span>
             {journey.category.replace(/_/g, " ")}

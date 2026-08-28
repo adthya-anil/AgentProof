@@ -10,7 +10,11 @@ export const AUDIT_EVENT_TYPES = [
   "quote.approved",
   "checkout.requested",
   "checkout.blocked",
+  // Emitted only when the order was really created at Razorpay. A simulated
+  // order gets `payment.order_created` instead, so a trace can never imply a
+  // real provider was involved when it was not.
   "razorpay.order_created",
+  "payment.order_created",
   "payment.verified",
   "payment.failed",
   "merchant_order.confirmed",

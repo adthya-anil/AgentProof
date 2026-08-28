@@ -10,17 +10,20 @@ import {
 } from "../hamperhub/mutations.js";
 import { loadPolicyFromFile } from "../policy/load.js";
 import type { Policy } from "../policy/schema.js";
-import { type JourneyResult, type SuiteResult, runScenario, runSuite } from "../runner/run.js";
+import { type JourneyResult, type SuiteResult, runScenario } from "../runner/run.js";
 import { assembleSuite } from "../scenarios/index.js";
 import type { Scenario } from "../scenarios/types.js";
+import { getLatestRun, type StoredRun } from "./runStore.js";
 
 /**
- * Server-side data layer for the dashboard.
+ * Read model for the dashboard.
  *
- * Preflight runs are deterministic and take tens of milliseconds, so pages
- * execute a real run on request rather than reading a stored artefact. That
- * keeps the dashboard honest — what it shows is a run that just happened, not a
- * cached summary that may no longer reflect the code.
+ * These functions **never execute a suite**. Report pages render runs that were
+ * triggered deliberately, because with a real model a suite costs minutes and
+ * real tokens, and a page load must not spend either on the reader's behalf.
+ *
+ * A run is started from the dashboard, streamed while it happens, and stored.
+ * Pages then read the stored result, which is why they are instant.
  */
 
 export type IntegrationVariant = "vulnerable" | "fixed";
@@ -39,7 +42,11 @@ export interface DashboardEnvironmentInfo {
   paymentAdapter: string;
   regressionCount: number;
   perturbationCount: number;
+  liveCount: number;
   generatedCount: number;
+  startedAt: string;
+  finishedAt: string;
+  persistedSuiteId: string | null;
 }
 
 export interface SuiteView {
@@ -48,63 +55,77 @@ export interface SuiteView {
   info: DashboardEnvironmentInfo;
 }
 
-let cachedSuites: Partial<Record<IntegrationVariant, SuiteView>> = {};
-
 /**
- * Runs the full suite for one integration variant.
- *
- * Memoised per process because navigating between dashboard pages should not
- * re-execute 24 journeys on every click, and the result is deterministic anyway.
+ * The most recent completed run for a variant, or null when none has been
+ * triggered yet. Callers must render a "start a run" state for null rather than
+ * quietly running one.
  */
-export async function getSuiteView(
-  variant: IntegrationVariant,
-): Promise<SuiteView> {
-  const cached = cachedSuites[variant];
-  if (cached) return cached;
+export function getSuiteView(variant: IntegrationVariant): SuiteView | null {
+  const stored = getLatestRun(variant);
+  return stored ? toView(stored) : null;
+}
 
-  const llm = llmFromEnv();
-  const policy = loadPolicyFromFile();
-  const assembled = await assembleSuite({ llm, policy, generatedCount: 9 });
-
-  const suite = await runSuite(assembled.scenarios, {
-    mutations: mutationsFor(variant),
-    runId: `dashboard_${variant}`,
-  });
-
-  const adapter = selectPaymentAdapter({
-    ids: new IdFactory("dashboard"),
-    clock: new ManualClock(),
-  });
-
-  const view: SuiteView = {
-    variant,
-    suite,
+function toView(stored: StoredRun): SuiteView {
+  return {
+    variant: stored.variant,
+    suite: stored.suite,
     info: {
-      policyVersion: suite.policyVersion,
-      policy,
-      generatorModel: assembled.generatorModel,
-      generatorIsReal: assembled.generatorIsReal,
-      paymentAdapter: describeAdapter(adapter),
-      regressionCount: assembled.regressionCount,
-      perturbationCount: assembled.perturbationCount,
-      generatedCount: assembled.generatedCount,
+      policyVersion: stored.suite.policyVersion,
+      policy: loadPolicyFromFile(),
+      generatorModel: stored.model,
+      generatorIsReal: stored.modelIsReal,
+      paymentAdapter: stored.paymentAdapter,
+      regressionCount: stored.regressionCount,
+      perturbationCount: stored.perturbationCount,
+      liveCount: stored.liveCount,
+      generatedCount: stored.generatedCount,
+      startedAt: stored.startedAt,
+      finishedAt: stored.finishedAt,
+      persistedSuiteId: stored.persistedSuiteId,
     },
   };
-  cachedSuites[variant] = view;
-  return view;
 }
 
-export function invalidateDashboardCache(): void {
-  cachedSuites = {};
-}
-
-export async function getJourney(
+export function getJourney(
   variant: IntegrationVariant,
   scenarioId: string,
-): Promise<JourneyResult | null> {
-  const view = await getSuiteView(variant);
-  return view.suite.journeys.find((j) => j.scenarioId === scenarioId) ?? null;
+): JourneyResult | null {
+  const view = getSuiteView(variant);
+  return view?.suite.journeys.find((j) => j.scenarioId === scenarioId) ?? null;
 }
+
+/** Describes the configured engine without running anything. */
+export function describeEngine(): {
+  model: string;
+  modelIsReal: boolean;
+  paymentAdapter: string;
+  policyVersion: string;
+} {
+  let model = "unconfigured";
+  let modelIsReal = false;
+  try {
+    const llm = llmFromEnv();
+    model = llm.name;
+    modelIsReal = llm.isReal;
+  } catch {
+    // An unconfigured or misconfigured model is a state to display, not throw on.
+  }
+  const adapter = selectPaymentAdapter({
+    ids: new IdFactory("describe"),
+    clock: new ManualClock(),
+  });
+  const policy = loadPolicyFromFile();
+  return {
+    model,
+    modelIsReal,
+    paymentAdapter: describeAdapter(adapter),
+    policyVersion: `${policy.policyId}`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Mutation evaluation
+// ---------------------------------------------------------------------------
 
 export interface MutationScoreView {
   mutation: MutationId;
@@ -131,45 +152,72 @@ const DEFECT_SCENARIOS: Record<MutationId, string> = {
 
 let cachedScores: MutationScoreView[] | null = null;
 
-/**
- * Scores each seeded defect in isolation.
- *
- * One mutant at a time, deliberately: with several active an upstream block can
- * mask a downstream defect and understate recall.
- */
-export async function getMutationScores(): Promise<MutationScoreView[]> {
-  if (cachedScores) return cachedScores;
+export function getCachedMutationScores(): MutationScoreView[] | null {
+  return cachedScores;
+}
 
-  const llm = llmFromEnv();
+/**
+ * Scores each seeded defect in isolation, one mutant at a time.
+ *
+ * Uses the fixed regression scenarios rather than agent-driven ones, so the
+ * measurement is a deterministic reproduction: recall must not vary because a
+ * model chose a different route on a given afternoon. Triggered explicitly and
+ * cached, like every other run.
+ */
+export interface MutationScoringProgress {
+  onMutationStart?: (
+    mutation: MutationId,
+    index: number,
+    total: number,
+  ) => void;
+  onMutationScored?: (
+    score: MutationScoreView,
+    index: number,
+    total: number,
+  ) => void;
+}
+
+export async function computeMutationScores(
+  progress: MutationScoringProgress = {},
+): Promise<MutationScoreView[]> {
   const policy = loadPolicyFromFile();
+  const llm = llmFromEnv();
+  // generatedCount 0: this measurement needs the deterministic regression set.
   const assembled = await assembleSuite({ llm, policy, generatedCount: 0 });
   const byId = new Map<string, Scenario>(
     assembled.scenarios.map((s) => [s.id, s]),
   );
 
   const scores: MutationScoreView[] = [];
+  let index = 0;
   for (const mutation of MUTATION_IDS) {
+    const position = index;
+    index += 1;
+    progress.onMutationStart?.(mutation, position, MUTATION_IDS.length);
+
     const descriptor = describeMutation(mutation);
-    const scenarioId = DEFECT_SCENARIOS[mutation];
-    const scenario = byId.get(scenarioId);
+    const scenario = byId.get(DEFECT_SCENARIOS[mutation]);
     if (!scenario) continue;
 
     const result = await runScenario(scenario, {
       mutations: MutationSet.only(mutation),
-      runId: `dashboard_mutation_${mutation}`,
+      runId: `mutation_${mutation}`,
     });
 
-    scores.push({
+    const score: MutationScoreView = {
       mutation,
       title: descriptor.title,
       description: descriptor.description,
       expectedInvariant: descriptor.expectedInvariant,
       detected: result.firedInvariants.includes(descriptor.expectedInvariant),
       detectedBy: result.firedInvariants,
-      scenarioId,
+      scenarioId: DEFECT_SCENARIOS[mutation],
       escapes: result.duplicatePayableOrders,
-    });
+    };
+    scores.push(score);
+    progress.onMutationScored?.(score, position, MUTATION_IDS.length);
   }
+
   cachedScores = scores;
   return scores;
 }
@@ -185,18 +233,21 @@ export interface EvaluationSummary {
   escapes: number;
 }
 
-export async function getEvaluationSummary(): Promise<EvaluationSummary> {
-  const [scores, fixed] = await Promise.all([
-    getMutationScores(),
-    getSuiteView("fixed"),
-  ]);
+/**
+ * Builds the evaluation summary from whatever has already been measured.
+ * Returns null until both a mutation scoring and a fixed-integration run exist.
+ */
+export function getEvaluationSummary(): EvaluationSummary | null {
+  const scores = cachedScores;
+  if (!scores || scores.length === 0) return null;
 
+  const fixed = getSuiteView("fixed");
   const detected = scores.filter((s) => s.detected).length;
   const total = scores.length;
-  // False positives are measured on the fixed integration: a journey flagged as
-  // an integration defect when there is no defect to find.
-  const falsePositives = fixed.suite.unsafeViolations;
-  const falsePositiveTotal = fixed.suite.journeys.length;
+
+  // False positives are only meaningful against an integration with no defects.
+  const falsePositives = fixed?.suite.unsafeViolations ?? 0;
+  const falsePositiveTotal = fixed?.suite.journeys.length ?? 0;
 
   return {
     scores,

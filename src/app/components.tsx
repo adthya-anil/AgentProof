@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { AuditEvent } from "@/lib/audit/events";
 import { formatMinor, roundPercent } from "@/lib/core/money";
 import type { JourneyDisposition } from "@/lib/runner/run";
+import type { ScenarioDriver } from "@/lib/scenarios/types";
 import type { Violation } from "@/lib/policy/violations";
 import type { IntegrationVariant } from "@/lib/dashboard/data";
 
@@ -11,7 +12,7 @@ export function Tabs({
   active,
   variant,
 }: {
-  active: "live" | "hamperhub" | "run" | "violations" | "evaluation" | "policy" | "audit";
+  active: "live" | "preflight" | "hamperhub" | "run" | "violations" | "evaluation" | "policy" | "audit";
   variant: IntegrationVariant;
 }) {
   const q = `?integration=${variant}`;
@@ -20,6 +21,7 @@ export function Tabs({
     // you have not seen.
     // Watching it happen is the fastest way to understand the product.
     { key: "live", href: "/live", label: "Live agent" },
+    { key: "preflight", href: "/preflight", label: "Run preflight" },
     { key: "hamperhub", href: "/hamperhub", label: "HamperHub" },
     { key: "run", href: `/${q}`, label: "Run summary" },
     { key: "violations", href: `/violations${q}`, label: "Violations" },
@@ -98,9 +100,32 @@ export function DispositionBadge({ value }: { value: JourneyDisposition }) {
     safely_rejected: "safely rejected",
     escalated: "escalated",
     unsafe_violation: "unsafe violation",
+    inconclusive: "inconclusive",
     errored: "errored",
   };
   return <span className={`badge ${value}`}>{labels[value]}</span>;
+}
+
+/**
+ * Marks who drove a journey.
+ *
+ * Shown on every journey row on purpose. A reader deserves to know whether an
+ * outcome came from a fixed reproduction or from a live model deciding for
+ * itself, because the two support very different claims.
+ */
+export function DriverBadge({ value }: { value: ScenarioDriver }) {
+  return value === "agent" ? (
+    <span className="driver live" title="A live model chose every tool call.">
+      live agent
+    </span>
+  ) : (
+    <span
+      className="driver fixed"
+      title="A fixed tool sequence, identical on every run."
+    >
+      fixed repro
+    </span>
+  );
 }
 
 export function ViolationCard({
@@ -212,6 +237,34 @@ export function ChainStatus({
           ? `Hash chain verified across ${events} events`
           : "HASH CHAIN BROKEN — the trail has been altered"}
       </span>
+    </div>
+  );
+}
+
+/**
+ * Shown when no run exists yet.
+ *
+ * The report pages deliberately do not start one themselves: with a real model a
+ * suite costs minutes and real tokens, so running it is the developer's call.
+ */
+export function NoRunYet({
+  variant,
+  what = "preflight run",
+}: {
+  variant: IntegrationVariant;
+  what?: string;
+}) {
+  return (
+    <div className="panel">
+      <h2>No {what} yet</h2>
+      <p className="note" style={{ marginTop: 0 }}>
+        Nothing has been executed for the <strong>{variant}</strong> integration.
+        A preflight run drives a real model through every scenario, so it is
+        started explicitly rather than on page load.
+      </p>
+      <Link className="primary link" href={`/preflight?variant=${variant}`}>
+        Start a preflight run →
+      </Link>
     </div>
   );
 }

@@ -67,7 +67,14 @@ async function driveAgent(
   };
 }
 
-export const PERTURBATION_SCENARIOS: readonly Scenario[] = Object.freeze([
+/**
+ * Transport perturbations (§7C).
+ *
+ * The agent behaviour is fixed here deliberately. What is under test is the
+ * transport — a duplicated delivery, a replay, a clock jump — so the journey
+ * itself must be identical every run or the fault has nothing stable to act on.
+ */
+const PERTURBATIONS: readonly Omit<Scenario, "driver">[] = Object.freeze([
   {
     id: "pert-01-delayed-response",
     title: "Buyer pauses mid-journey and the quote expires before checkout",
@@ -141,3 +148,10 @@ export const PERTURBATION_SCENARIOS: readonly Scenario[] = Object.freeze([
     },
   },
 ]);
+
+export const PERTURBATION_SCENARIOS: readonly Scenario[] = Object.freeze(
+  PERTURBATIONS.map((scenario) => ({
+    ...scenario,
+    driver: "deterministic" as const,
+  })),
+);

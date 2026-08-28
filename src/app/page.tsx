@@ -4,6 +4,8 @@ import { getSuiteView, type IntegrationVariant } from "@/lib/dashboard/data";
 import {
   ChainStatus,
   DispositionBadge,
+  DriverBadge,
+  NoRunYet,
   Readiness,
   Tabs,
   VariantSwitcher,
@@ -24,7 +26,18 @@ export default async function RunSummaryPage({
 }) {
   const params = await searchParams;
   const variant = parseVariant(params.integration);
-  const { suite, info } = await getSuiteView(variant);
+  const view = getSuiteView(variant);
+
+  if (!view) {
+    return (
+      <>
+        <Tabs active="run" variant={variant} />
+        <VariantSwitcher variant={variant} basePath="/" />
+        <NoRunYet variant={variant} />
+      </>
+    );
+  }
+  const { suite, info } = view;
 
   const categories = new Map<string, { total: number; unsafe: number }>();
   for (const journey of suite.journeys) {
@@ -52,7 +65,12 @@ export default async function RunSummaryPage({
           <div>
             <span>Journeys</span>
             {info.regressionCount} regression + {info.perturbationCount}{" "}
-            perturbation + {info.generatedCount} AI-generated
+            perturbation + {info.liveCount} live-agent replay +{" "}
+            {info.generatedCount} AI-generated
+          </div>
+          <div>
+            <span>Driven by a live model</span>
+            {suite.agentDriven} of {suite.journeys.length} journeys
           </div>
           <div>
             <span>Scenario generator</span>
@@ -101,12 +119,71 @@ export default async function RunSummaryPage({
             <div className="n">{suite.moneyCriticalEscapes}</div>
             <div className="k">Money escapes</div>
           </div>
+          <div className="stat">
+            <div className="n">{suite.inconclusive}</div>
+            <div className="k">Inconclusive</div>
+          </div>
           <div className="stat info">
             <div className="n">{formatMinor(suite.moneyAtRiskMinor)}</div>
             <div className="k">At risk, prevented</div>
           </div>
         </div>
+        {suite.inconclusive > 0 && (
+          <p className="note" style={{ marginBottom: 0 }}>
+            Inconclusive journeys are live-agent runs that ended without anything
+            deciding them — an exhausted tool budget or a model failure. They are
+            counted separately rather than as safe rejections, because they
+            verified nothing.
+          </p>
+        )}
       </div>
+
+      {suite.byModel.length > 1 && (
+        <div className="panel">
+          <h2>Where the models differ</h2>
+          <p className="note" style={{ marginTop: 0 }}>
+            Every live goal was attempted by each model, because a merchant does
+            not get to choose which agent shops their store. Rows that disagree
+            show how much this integration is leaning on the agent&apos;s own
+            judgement instead of its own checks.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th className="num">Journeys</th>
+                <th className="num">Passed</th>
+                <th className="num">Unsafe</th>
+                <th className="num">Inconclusive</th>
+                <th>Invariants tripped</th>
+              </tr>
+            </thead>
+            <tbody>
+              {suite.byModel.map((entry) => (
+                <tr key={entry.model}>
+                  <td className="mono">{entry.model}</td>
+                  <td className="num">{entry.journeys}</td>
+                  <td className="num">{entry.passed}</td>
+                  <td
+                    className="num"
+                    style={{
+                      color: entry.unsafeViolations > 0 ? "var(--bad)" : undefined,
+                    }}
+                  >
+                    {entry.unsafeViolations}
+                  </td>
+                  <td className="num note">{entry.inconclusive}</td>
+                  <td className="mono note" style={{ fontSize: "0.72rem" }}>
+                    {entry.firedInvariants.length > 0
+                      ? entry.firedInvariants.join(", ")
+                      : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <div className="grid-2">
         <div className="panel">
@@ -148,6 +225,7 @@ export default async function RunSummaryPage({
           <thead>
             <tr>
               <th>Scenario</th>
+              <th>Driven by</th>
               <th>Category</th>
               <th>Outcome</th>
               <th>Invariants fired</th>
@@ -164,6 +242,14 @@ export default async function RunSummaryPage({
                     <code>{journey.scenarioId}</code>
                   </Link>
                   <div className="note">{journey.title}</div>
+                </td>
+                <td>
+                  <DriverBadge value={journey.driver} />
+                  {journey.model && (
+                    <div className="note mono" style={{ fontSize: "0.7rem" }}>
+                      {journey.model}
+                    </div>
+                  )}
                 </td>
                 <td className="note">{journey.category.replace(/_/g, " ")}</td>
                 <td>

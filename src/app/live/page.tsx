@@ -1,4 +1,4 @@
-import { isRealLlmConfigured } from "@/lib/agent/factory";
+import { isRealLlmConfigured, llmPoolFromEnv } from "@/lib/agent/factory";
 import { loadDotEnv } from "@/lib/core/env";
 import { Tabs } from "../components";
 import LiveConsole from "./LiveConsole";
@@ -15,6 +15,7 @@ export const dynamic = "force-dynamic";
 export default function LivePage() {
   loadDotEnv();
   const realModel = isRealLlmConfigured();
+  const pool = llmPoolFromEnv().filter((llm) => llm.isReal);
 
   return (
     <>
@@ -45,7 +46,19 @@ export default function LivePage() {
         </div>
       )}
 
-      <LiveConsole />
+      {pool.length > 1 && (
+        <div className="panel">
+          <h2>Two agents, same store</h2>
+          <p className="note" style={{ marginTop: 0, marginBottom: 0 }}>
+            {pool.map((llm) => llm.name).join(" and ")} are both configured. Run
+            the identical buyer request through each and compare — they do not
+            shop the same way, and the differences are exactly what a merchant
+            cannot control.
+          </p>
+        </div>
+      )}
+
+      <LiveConsole models={pool.map((llm) => llm.name)} />
     </>
   );
 }

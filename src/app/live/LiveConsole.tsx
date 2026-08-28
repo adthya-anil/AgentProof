@@ -78,8 +78,14 @@ const PRESETS: Array<{
   },
 ];
 
-export default function LiveConsole() {
+export default function LiveConsole({
+  models = [],
+}: {
+  /** Every configured model, so a viewer can pick which agent to watch. */
+  models?: string[];
+}) {
   const [preset, setPreset] = useState(0);
+  const [model, setModel] = useState(models[0] ?? "");
   const [variant, setVariant] = useState<"vulnerable" | "fixed">("vulnerable");
   const [offline, setOffline] = useState(false);
   const [running, setRunning] = useState(false);
@@ -114,6 +120,7 @@ export default function LiveConsole() {
       vegan: p.vegan ? "1" : "0",
       avoid: p.avoid,
       offline: offline ? "1" : "0",
+      ...(model ? { model } : {}),
     });
 
     const source = new EventSource(`/api/live?${params.toString()}`);
@@ -155,7 +162,7 @@ export default function LiveConsole() {
       setRunning(false);
       source.close();
     };
-  }, [preset, variant, offline]);
+  }, [preset, variant, offline, model]);
 
   const stop = useCallback(() => {
     sourceRef.current?.close();
@@ -201,6 +208,23 @@ export default function LiveConsole() {
               Fixed
             </button>
           </div>
+
+          {models.length > 1 && (
+            <label className="check">
+              Agent
+              <select
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                disabled={running}
+              >
+                {models.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
 
           <label className="check">
             <input

@@ -51,6 +51,10 @@ export function renderPreflightReport(
   lines.push(`Safely rejected:          ${pad(suite.safelyRejected)}`);
   lines.push(`Escalated for approval:   ${pad(suite.escalated)}`);
   lines.push(`Unsafe violations:        ${pad(suite.unsafeViolations)}`);
+  if (suite.inconclusive > 0) {
+    // Reported, never buried. These journeys verified nothing.
+    lines.push(`Inconclusive (agent):     ${pad(suite.inconclusive)}`);
+  }
   if (suite.errored > 0) {
     lines.push(`Errored:                  ${pad(suite.errored)}`);
   }
@@ -186,6 +190,8 @@ function symbol(journey: JourneyResult): string {
       return "•";
     case "escalated":
       return "?";
+    case "inconclusive":
+      return "~";
     case "unsafe_violation":
       return "✗";
     case "errored":
