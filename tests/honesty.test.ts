@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { type CompletionResult, type LLM, LlmError } from "../src/lib/agent/llm.js";
+import { createEnvironment } from "../src/lib/harness.js";
 import { ScriptedLLM } from "../src/lib/agent/scripted.js";
 import { MutationSet } from "../src/lib/hamperhub/mutations.js";
 import { loadPolicyFromFile } from "../src/lib/policy/load.js";
@@ -214,6 +215,45 @@ describe("an agent that ran out of road", () => {
     expect(suite.safelyRejected).toBe(0);
     expect(suite.passed).toBe(0);
     expect(suite.agentDriven).toBe(2);
+  });
+});
+
+describe("documented knobs actually do something", () => {
+  /**
+   * `AGENTPROOF_SEED` was documented in the README and `.env.example` as
+   * controlling reproducible runs, and was read by nothing at all — every run used
+   * the hard-coded default whatever the file said. A knob that does nothing is
+   * worse than no knob in a project whose whole claim is that its reports mean
+   * what they say.
+   */
+  const withSeed = (seed?: string) => {
+    if (seed === undefined) delete process.env.AGENTPROOF_SEED;
+    else process.env.AGENTPROOF_SEED = seed;
+    return createEnvironment().ids.next("quote");
+  };
+
+  afterEach(() => {
+    delete process.env.AGENTPROOF_SEED;
+  });
+
+  it("makes AGENTPROOF_SEED reproducible", () => {
+    expect(withSeed("1337")).toBe(withSeed("1337"));
+  });
+
+  it("makes AGENTPROOF_SEED actually change the run", () => {
+    expect(withSeed("1337")).not.toBe(withSeed("9999"));
+  });
+
+  it("falls back to a fixed default when the seed is blank", () => {
+    // A bare `AGENTPROOF_SEED=` line must not become the literal seed "".
+    expect(withSeed("")).toBe(withSeed(undefined));
+  });
+
+  it("lets an explicit option beat the environment", () => {
+    process.env.AGENTPROOF_SEED = "from-env";
+    const explicit = createEnvironment({ seed: "from-code" }).ids.next("quote");
+    const fromEnv = createEnvironment().ids.next("quote");
+    expect(explicit).not.toBe(fromEnv);
   });
 });
 

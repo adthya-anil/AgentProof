@@ -49,7 +49,17 @@ export interface EnvironmentOptions {
  */
 export function createEnvironment(opts: EnvironmentOptions = {}): Environment {
   const clock = opts.clock ?? new ManualClock(opts.startAt);
-  const ids = new IdFactory(opts.seed ?? "agentproof");
+  /**
+   * Explicit seed, then `AGENTPROOF_SEED`, then a fixed default.
+   *
+   * The environment variable is read here because it was documented in both the
+   * README and `.env.example` as controlling reproducible runs while being read by
+   * absolutely nothing — every run used the hard-coded default no matter what the
+   * file said. A knob that does nothing is worse than no knob, particularly in a
+   * project whose entire claim is that its reports mean what they say.
+   */
+  const envSeed = process.env.AGENTPROOF_SEED?.trim();
+  const ids = new IdFactory(opts.seed ?? (envSeed || "agentproof"));
   const state = new MerchantState(clock, ids);
   const policy = opts.policy ?? loadPolicyFromFile();
   const version = policyVersion(policy);
