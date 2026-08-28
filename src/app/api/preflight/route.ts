@@ -259,6 +259,7 @@ export async function GET(request: Request): Promise<Response> {
           startedAt,
           model: describePool(pool),
           modelIsReal: pool.some((m) => m.isReal),
+          adversaryModel: adversary?.name ?? null,
           paymentAdapter,
           regressionCount: assembled.regressionCount,
           perturbationCount: assembled.perturbationCount,

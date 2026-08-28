@@ -41,6 +41,14 @@ export interface DashboardEnvironmentInfo {
   policy: Policy;
   generatorModel: string;
   generatorIsReal: boolean;
+  /**
+   * The model given the adversary role, when roles were split.
+   *
+   * Needed so a stored report can describe how it was produced. The by-model table
+   * asserted a cross-product that a split run never performs, and without this field
+   * it had no way to know the difference.
+   */
+  adversaryModel?: string | null;
   paymentAdapter: string;
   regressionCount: number;
   perturbationCount: number;
@@ -78,6 +86,7 @@ function toView(stored: StoredRun): SuiteView {
       policy: loadPolicyFromFile(),
       generatorModel: stored.model,
       generatorIsReal: stored.modelIsReal,
+      adversaryModel: stored.adversaryModel ?? null,
       paymentAdapter: stored.paymentAdapter,
       regressionCount: stored.regressionCount,
       perturbationCount: stored.perturbationCount,
