@@ -12,7 +12,16 @@ export function Tabs({
   active,
   variant,
 }: {
-  active: "live" | "preflight" | "hamperhub" | "run" | "violations" | "evaluation" | "policy" | "audit";
+  active:
+    | "live"
+    | "preflight"
+    | "hamperhub"
+    | "merchants"
+    | "run"
+    | "violations"
+    | "evaluation"
+    | "policy"
+    | "audit";
   variant: IntegrationVariant;
 }) {
   const q = `?integration=${variant}`;
@@ -23,6 +32,9 @@ export function Tabs({
     { key: "live", href: "/live", label: "Live agent" },
     { key: "preflight", href: "/preflight", label: "Run preflight" },
     { key: "hamperhub", href: "/hamperhub", label: "HamperHub" },
+    // Next to the merchant it contrasts with, because the point of the page is the
+    // comparison — a tab buried after the reports would be read as an appendix.
+    { key: "merchants", href: `/merchants${q}`, label: "Merchants" },
     { key: "run", href: `/${q}`, label: "Run summary" },
     { key: "violations", href: `/violations${q}`, label: "Violations" },
     { key: "evaluation", href: `/evaluation`, label: "Evaluation" },
