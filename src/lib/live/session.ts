@@ -1,5 +1,7 @@
 import { BuyerAgent } from "../agent/buyer.js";
+import { randomUUID } from "node:crypto";
 import { llmFromEnv, llmPoolFromEnv } from "../agent/factory.js";
+import { getSession, rememberSession } from "./sessionStore.js";
 import type { AuditEvent } from "../audit/events.js";
 import { ManualClock } from "../core/clock.js";
 import { IdFactory } from "../core/ids.js";
@@ -26,7 +28,14 @@ export type LiveEvent =
   | { kind: "session"; model: string; modelIsReal: boolean; paymentAdapter: string; variant: string; utterance: string }
   | { kind: "audit"; event: SerialisedAuditEvent }
   | { kind: "thinking"; note: string }
-  | { kind: "hosted_payment"; url: string; orderId: string; amount: number }
+  | {
+      kind: "hosted_payment";
+      url: string;
+      orderId: string;
+      amount: number;
+      /** Pass to /api/live/recheck once the link has been paid. */
+      sessionId: string;
+    }
   | { kind: "done"; summary: LiveSummary }
   | { kind: "error"; message: string };
 
@@ -197,12 +206,32 @@ export async function runLiveSession(
       ? env.service.findPaymentAttemptForCheckout(authorised.id)
       : undefined;
 
-    if (attempt?.hostedUrl) {
+    if (attempt?.hostedUrl && authorised) {
+      /**
+       * Keep the session reachable so the payment can be re-checked.
+       *
+       * Paying a hosted link happens minutes after the journey ends. Without this
+       * the environment was discarded on return, so a successful payment could
+       * never be reflected — the console sat on `verified=false` forever because
+       * nothing was ever going to look again.
+       */
+      const sessionId = randomUUID();
+      rememberSession({
+        id: sessionId,
+        env,
+        intent,
+        checkoutIntentId: authorised.id,
+        paymentAttemptId: attempt.id,
+        hostedUrl: attempt.hostedUrl,
+        createdAt: Date.now(),
+      });
+
       emit({
         kind: "hosted_payment",
         url: attempt.hostedUrl,
         orderId: attempt.providerOrderId,
         amount: toMajor(attempt.amountMinor),
+        sessionId,
       });
     }
 
@@ -252,4 +281,88 @@ export async function runLiveSession(
       message: error instanceof Error ? error.message : String(error),
     });
   }
+}
+
+
+/** What a re-check found, and what the Guard did about it. */
+export interface RecheckResult {
+  found: boolean;
+  /** Provider-reported payment state, e.g. "captured". */
+  status: string | null;
+  verified: boolean;
+  /** True when the merchant recorded the order as fulfilled. */
+  fulfilled: boolean;
+  /** Why fulfilment was refused, when it was. */
+  fulfilmentNote: string | null;
+  /** Audit entries appended by this re-check, so the console can show them. */
+  events: SerialisedAuditEvent[];
+  auditChainOk: boolean;
+  amount: string | null;
+}
+
+/**
+ * Re-verifies a hosted payment after a human has paid it, then tries to fulfil.
+ *
+ * This is the other half of the real-payment story and it was missing. The agent
+ * creates a payment link and stops, because `INV-PAYMENT-STATE` correctly refuses
+ * to fulfil an uncaptured payment — so the run ends with `verified=false` and that
+ * is the *right* answer at that moment. What was wrong is that paying the link
+ * afterwards changed nothing, since nobody ever asked the provider again.
+ *
+ * Deliberately goes back through the Guard rather than reading Razorpay and
+ * updating a field. The point of the product is that money moves only when the
+ * invariants agree, and that has to hold for the last step too.
+ */
+export async function recheckPayment(
+  sessionId: string,
+): Promise<RecheckResult> {
+  const session = getSession(sessionId);
+  if (!session) {
+    return {
+      found: false,
+      status: null,
+      verified: false,
+      fulfilled: false,
+      fulfilmentNote:
+        "This session is no longer held in memory. Re-checks are kept for an " +
+        "hour, and are lost when the server restarts.",
+      events: [],
+      auditChainOk: true,
+      amount: null,
+    };
+  }
+
+  const { env } = session;
+  const before = env.audit.all().length;
+
+  // Straight back through the Guard: this really calls Razorpay.
+  const status = await env.guard.callTool("get_payment_status", {
+    payment_attempt_id: session.paymentAttemptId,
+  });
+
+  const attempt = env.service.getPaymentAttempt(session.paymentAttemptId);
+  let fulfilled = false;
+  let fulfilmentNote: string | null = null;
+
+  // Only worth attempting once the provider says the money is actually there.
+  if (attempt?.verified) {
+    const result = env.guard.fulfillOrder(session.checkoutIntentId);
+    fulfilled = result.ok;
+    if (!result.ok) fulfilmentNote = result.reason;
+  } else {
+    fulfilmentNote =
+      "Razorpay still does not report this payment as captured, so fulfilment " +
+      "was not attempted. INV-PAYMENT-STATE would refuse it.";
+  }
+
+  return {
+    found: true,
+    status: attempt?.status ?? (status.ok ? "unknown" : null),
+    verified: attempt?.verified ?? false,
+    fulfilled,
+    fulfilmentNote,
+    events: env.audit.all().slice(before).map(serialise),
+    auditChainOk: env.audit.verify().ok,
+    amount: attempt ? formatMinor(attempt.amountMinor) : null,
+  };
 }

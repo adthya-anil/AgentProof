@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { RecheckResult } from "@/lib/live/session";
 import type {
   LiveEvent,
   LiveSummary,
@@ -94,6 +95,9 @@ export default function LiveConsole({
   const [summary, setSummary] = useState<LiveSummary | null>(null);
   const [hosted, setHosted] = useState<Extract<LiveEvent, { kind: "hosted_payment" }> | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [rechecking, setRechecking] = useState(false);
+  const [recheckResult, setRecheckResult] = useState<RecheckResult | null>(null);
+  const [recheckError, setRecheckError] = useState<string | null>(null);
   const sourceRef = useRef<EventSource | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -163,6 +167,43 @@ export default function LiveConsole({
       source.close();
     };
   }, [preset, variant, offline, model]);
+
+  /**
+   * Asks Razorpay what actually happened, then puts the answer through the Guard.
+   *
+   * Appends the resulting audit entries to the same trace, so the verification and
+   * any fulfilment appear as further steps in the journey rather than as a
+   * disconnected status box. They are real entries in the hash-chained log.
+   */
+  const recheck = useCallback(async () => {
+    if (!hosted?.sessionId) return;
+    setRechecking(true);
+    setRecheckError(null);
+
+    try {
+      const response = await fetch(
+        `/api/live/recheck?session=${encodeURIComponent(hosted.sessionId)}`,
+        { method: "POST" },
+      );
+      const body = (await response.json()) as RecheckResult & { error?: string };
+
+      if (body.error) {
+        setRecheckError(body.error);
+        return;
+      }
+      setRecheckResult(body);
+      // Reuse the same renderer as the live stream, so a verification looks like
+      // the journey step it is rather than a separate status widget.
+      const appended = (body.events ?? [])
+        .map((event) => toRow(event))
+        .filter((row): row is Row => row !== null);
+      setRows((prev) => [...prev, ...appended]);
+    } catch (cause) {
+      setRecheckError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setRechecking(false);
+    }
+  }, [hosted]);
 
   const stop = useCallback(() => {
     sourceRef.current?.close();
@@ -308,13 +349,68 @@ export default function LiveConsole({
             The Guard authorised this, so a genuine test-mode order now exists.
             Order <code>{hosted.orderId}</code> for ₹{hosted.amount}.
           </p>
-          <a className="primary link" href={hosted.url} target="_blank" rel="noreferrer">
-            Pay ₹{hosted.amount} in Razorpay test mode →
-          </a>
+          <div className="controls">
+            <a
+              className="primary link"
+              href={hosted.url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Pay ₹{hosted.amount} in Razorpay test mode →
+            </a>
+
+            {/*
+              The other half of the story, and it used to be missing entirely.
+              Paying the link happens minutes after the journey ends, so without a
+              way to ask again the console sat on verified=false forever and a
+              successful payment looked like a broken app.
+            */}
+            <button
+              type="button"
+              onClick={recheck}
+              disabled={rechecking}
+              className="primary"
+            >
+              {rechecking ? "Checking Razorpay…" : "I've paid — verify and fulfil"}
+            </button>
+          </div>
+
           <p className="note" style={{ marginBottom: 0 }}>
             Use <strong>Netbanking</strong> and pick Success on the mock page.
-            Cards are rejected as international on a fresh test account.
+            Cards are rejected as international on a fresh test account. Then come
+            back and press verify: the payment goes through the same Guard
+            checkpoints, and fulfilment is attempted only once Razorpay confirms
+            the money is captured.
           </p>
+
+          {recheckResult && (
+            <div
+              className={`readiness ${
+                recheckResult.fulfilled ? "ready" : "notready"
+              }`}
+              style={{ marginTop: "1rem" }}
+            >
+              <span>{recheckResult.fulfilled ? "✓" : "•"}</span>
+              <div>
+                {recheckResult.fulfilled
+                  ? `Payment captured and order fulfilled${
+                      recheckResult.amount ? ` — ${recheckResult.amount}` : ""
+                    }`
+                  : recheckResult.verified
+                    ? "Payment captured, but fulfilment was refused"
+                    : "Razorpay has not captured this payment yet"}
+                <small>
+                  {recheckResult.fulfilmentNote ??
+                    `Provider status: ${recheckResult.status ?? "unknown"}. ` +
+                      `Hash chain ${recheckResult.auditChainOk ? "intact" : "BROKEN"}.`}
+                </small>
+              </div>
+            </div>
+          )}
+
+          {recheckError && (
+            <p style={{ color: "var(--bad)", marginBottom: 0 }}>{recheckError}</p>
+          )}
         </div>
       )}
 
