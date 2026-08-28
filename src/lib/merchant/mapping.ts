@@ -343,6 +343,24 @@ export function readTriState(
   }
   if (typeof raw === "boolean") return raw;
   const truthy = field.truthy ?? DEFAULT_TRUTHY;
+
+  /**
+   * A tag list means "contains", not "equals".
+   *
+   * How most storefronts express a flag: `tags: ["PLANT_BASED", "GIFT"]` rather than
+   * `vegan: true`. Comparing the whole array against the truthy list never matches, so
+   * before this every tagged product read as false — and a vegan product marked
+   * not-vegan makes INV-PRODUCT-SAFETY reject a correct integration, which is a false
+   * violation rather than a missed one. Found by running against a real merchant; no
+   * unit test had a tag list in it, because the fixtures were written from the same
+   * assumption as the code.
+   */
+  if (Array.isArray(raw)) {
+    return raw.some((entry) =>
+      truthy.some((candidate) => candidate === entry),
+    );
+  }
+
   return truthy.some((candidate) => candidate === raw);
 }
 
