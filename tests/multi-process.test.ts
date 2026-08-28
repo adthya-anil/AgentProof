@@ -2,10 +2,22 @@ import { execFile } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
 const run = promisify(execFile);
+
+/**
+ * Where the forked child should import `pg` from, as a URL.
+ *
+ * `require.resolve` returns a filesystem path, and a bare absolute path is only a valid
+ * ESM specifier on POSIX. On Windows it is `C:\\Users\\...`, which Node's loader
+ * rejects outright — so both tests in this file would fail on a Windows machine with an
+ * error that looks like a lost race rather than a bad import. A `file://` URL is correct
+ * on every platform.
+ */
+const PG_SPECIFIER = JSON.stringify(pathToFileURL(require.resolve("pg")).href);
 
 /**
  * Concurrency across processes, not across promises.
@@ -55,7 +67,7 @@ async function inParallelProcesses(
  * rather than the claim.
  */
 const CLAIMANT = `
-import pg from ${JSON.stringify(require.resolve("pg"))};
+import pg from ${PG_SPECIFIER};
 const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
 await client.connect();
 const owner = "chk_" + process.pid;
@@ -109,7 +121,7 @@ describeDb("two processes, one database", () => {
      */
     await inParallelProcesses(
       `
-import pg from ${JSON.stringify(require.resolve("pg"))};
+import pg from ${PG_SPECIFIER};
 const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
 await client.connect();
 await client.query("create table if not exists mp_control (claim_key text, owner_id text)");
@@ -120,7 +132,7 @@ await client.end();
     );
 
     const unconstrained = `
-import pg from ${JSON.stringify(require.resolve("pg"))};
+import pg from ${PG_SPECIFIER};
 const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
 await client.connect();
 const owner = "chk_" + process.pid;
