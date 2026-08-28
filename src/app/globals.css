@@ -681,3 +681,39 @@ ol.live pre {
   background: var(--panel-2);
   color: var(--text);
 }
+
+
+/* ---- expanded journey row ---- */
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0.4rem 0 0.6rem;
+  font-size: 0.78rem;
+}
+.steps li {
+  padding: 0.22rem 0 0.22rem 0.6rem;
+  border-left: 2px solid var(--border);
+}
+/* A blocked step should be findable by eye in a list of twenty. */
+.steps li[data-decision="block"] {
+  border-left-color: var(--bad);
+}
+.steps li[data-decision="escalate"] {
+  border-left-color: var(--warn);
+}
+.steps li[data-decision="allow"] {
+  border-left-color: var(--ok);
+}
+.steps code {
+  font-size: 0.74rem;
+}
+
+.finding {
+  border-left: 3px solid var(--bad);
+  padding: 0.4rem 0 0.4rem 0.7rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.82rem;
+}
+.finding > div + div {
+  margin-top: 0.2rem;
+}

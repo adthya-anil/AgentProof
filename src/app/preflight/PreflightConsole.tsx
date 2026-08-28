@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
 /**
  * Triggers a preflight run and streams it.
@@ -12,8 +12,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * rather than a spinner that eventually yields a table.
  */
 
-type Mode = "deterministic" | "agent" | "both";
-type Payments = "simulated" | "razorpay";
+type RunSize = "quick" | "standard" | "compare";
 type Driver = "deterministic" | "agent";
 
 interface ModelBreakdown {
@@ -30,6 +29,20 @@ interface ScenarioRow {
   title: string;
   category: string;
   driver: Driver;
+  /** Compact account of what happened, for the expanded row. */
+  steps?: Array<{
+    seq: number;
+    type: string;
+    tool?: string | null;
+    reason?: string | null;
+    decision?: string | null;
+  }>;
+  violations?: Array<{
+    invariant: string;
+    severity: string;
+    message: string;
+    remediation: string;
+  }>;
   assignedModel?: string | null;
   model?: string | null;
   targetsInvariant?: string | null;
@@ -67,7 +80,7 @@ export default function PreflightConsole({
   initialVariant: "vulnerable" | "fixed";
 }) {
   const [variant, setVariant] = useState(initialVariant);
-  const [mode, setMode] = useState<Mode>("both");
+  const [size, setSize] = useState<RunSize>("quick");
   /**
    * Simulated by default.
    *
@@ -75,14 +88,18 @@ export default function PreflightConsole({
    * of live side effects to create by pressing one button. The important part is
    * not the default but that the report says which one actually ran.
    */
-  const [payments, setPayments] = useState<Payments>("simulated");
-  const [generated, setGenerated] = useState(3);
+
+  /** Which journey row is expanded, if any. */
+  const [openRow, setOpenRow] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [phase, setPhase] = useState<string | null>(null);
   const [meta, setMeta] = useState<{
     model: string;
     modelIsReal: boolean;
     pool: string[];
+    /** Set when a model was given the adversary role instead of shopping. */
+    adversaryModel: string | null;
+    buyerModels: string[];
     paymentAdapter: string;
   } | null>(null);
   const [composition, setComposition] = useState<{
@@ -108,9 +125,7 @@ export default function PreflightConsole({
 
     const params = new URLSearchParams({
       variant,
-      mode,
-      payments,
-      generated: String(generated),
+      size,
     });
     const source = new EventSource(`/api/preflight?${params.toString()}`);
     sourceRef.current = source;
@@ -124,6 +139,8 @@ export default function PreflightConsole({
           model: e.model as string,
           modelIsReal: e.modelIsReal as boolean,
           pool: (e.pool as string[]) ?? [],
+          adversaryModel: (e.adversaryModel as string | null) ?? null,
+          buyerModels: (e.buyerModels as string[]) ?? [],
           paymentAdapter: e.paymentAdapter as string,
         });
       } else if (kind === "phase") {
@@ -163,6 +180,8 @@ export default function PreflightConsole({
                   providerOrders: e.providerOrders as number,
                   toolPath: e.toolPath as string[],
                   durationMs: e.durationMs as number,
+                  steps: e.steps as ScenarioRow["steps"],
+                  violations: e.violations as ScenarioRow["violations"],
                 }
               : r,
           ),
@@ -187,7 +206,7 @@ export default function PreflightConsole({
       setRunning(false);
       source.close();
     };
-  }, [variant, mode, payments, generated]);
+  }, [variant, size]);
 
   const stop = useCallback(() => {
     sourceRef.current?.close();
@@ -229,41 +248,15 @@ export default function PreflightConsole({
           </div>
 
           <label className="check">
-            Journeys
+            Run
             <select
-              value={mode}
-              onChange={(e) => setMode(e.target.value as Mode)}
+              value={size}
+              onChange={(e) => setSize(e.target.value as RunSize)}
               disabled={running}
             >
-              <option value="both">Fixed repros + live agent</option>
-              <option value="agent">Live agent only</option>
-              <option value="deterministic">Fixed repros only (seconds)</option>
-            </select>
-          </label>
-
-          <label className="check">
-            AI-generated goals
-            <select
-              value={generated}
-              onChange={(e) => setGenerated(Number(e.target.value))}
-              disabled={running}
-            >
-              <option value={0}>0</option>
-              <option value={3}>3</option>
-              <option value={6}>6</option>
-              <option value={9}>9</option>
-            </select>
-          </label>
-
-          <label className="check">
-            Payments
-            <select
-              value={payments}
-              onChange={(e) => setPayments(e.target.value as Payments)}
-              disabled={running}
-            >
-              <option value="simulated">Simulated</option>
-              <option value="razorpay">Real Razorpay test mode</option>
+              <option value="quick">Quick — 15 journeys, seconds</option>
+              <option value="standard">Standard — 30 journeys, a few minutes</option>
+              <option value="compare">Compare models — 45 journeys</option>
             </select>
           </label>
 
@@ -295,6 +288,12 @@ export default function PreflightConsole({
               <span>Integration</span>
               {variant}
             </div>
+            {meta.adversaryModel && (
+              <div>
+                <span>Adversary</span>
+                <span className="mono">{meta.adversaryModel}</span>
+              </div>
+            )}
             {composition && (
               <div>
                 <span>Composition</span>
@@ -338,7 +337,17 @@ export default function PreflightConsole({
             </thead>
             <tbody>
               {rows.map((row) => (
-                <tr key={row.id} style={{ opacity: row.state === "waiting" ? 0.45 : 1 }}>
+                <Fragment key={row.id}>
+                <tr
+                  style={{
+                    opacity: row.state === "waiting" ? 0.45 : 1,
+                    cursor: row.state === "done" ? "pointer" : "default",
+                  }}
+                  onClick={() =>
+                    row.state === "done" &&
+                    setOpenRow(openRow === row.id ? null : row.id)
+                  }
+                >
                   <td>
                     {row.state === "waiting" && <span className="note">·</span>}
                     {row.state === "running" && <span className="pulse">●</span>}
@@ -406,6 +415,65 @@ export default function PreflightConsole({
                     {row.moneyAtRisk ? `₹${row.moneyAtRisk}` : "—"}
                   </td>
                 </tr>
+
+                {/*
+                  What happened, in place.
+                  A row used to say a journey was an unsafe violation and leave you to
+                  navigate elsewhere to find out why. The account of a finding belongs
+                  next to the finding.
+                */}
+                {openRow === row.id && (
+                  <tr>
+                    <td colSpan={6} style={{ background: "var(--panel-2)" }}>
+                      {row.violations && row.violations.length > 0 && (
+                        <div style={{ marginBottom: "0.85rem" }}>
+                          {row.violations.map((v) => (
+                            <div key={v.invariant + v.message} className="finding">
+                              <div>
+                                <span className={`badge ${v.severity}`}>
+                                  {v.severity}
+                                </span>{" "}
+                                <code>{v.invariant}</code>
+                              </div>
+                              <div>{v.message}</div>
+                              <div className="note">Fix: {v.remediation}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <ol className="steps">
+                        {(row.steps ?? []).map((step) => (
+                          <li key={step.seq} data-decision={step.decision ?? ""}>
+                            <span className="mono note">
+                              {String(step.seq).padStart(2, "0")}
+                            </span>{" "}
+                            <span className="mono">{step.type}</span>
+                            {step.tool ? (
+                              <>
+                                {" · "}
+                                <code>{step.tool}</code>
+                              </>
+                            ) : null}
+                            {step.reason ? (
+                              <div className="note">{step.reason}</div>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ol>
+
+                      <p className="note" style={{ marginBottom: 0 }}>
+                        {row.durationMs}ms ·{" "}
+                        <Link
+                          href={`/journey/${encodeURIComponent(row.id)}?integration=${variant}`}
+                        >
+                          full replay with payloads →
+                        </Link>
+                      </p>
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               ))}
             </tbody>
           </table>

@@ -43,6 +43,14 @@ export interface AgentDrivenOptions {
   maxToolCalls?: number;
   /** Restrict to specific regression ids. Empty means all of them. */
   only?: readonly string[];
+  /**
+   * How goals are paired with models.
+   *
+   * `round-robin` (default) gives each goal to one model, so both models work and
+   * nothing is executed twice. `cross-product` gives every goal to every model, which
+   * doubles the run and is only worth it when the head-to-head *is* the finding.
+   */
+  pairing?: "round-robin" | "cross-product";
 }
 
 export function agentDrivenScenarios(
@@ -58,21 +66,36 @@ export function agentDrivenScenarios(
 
   const scenarios: Scenario[] = [];
 
-  for (const goal of goals) {
-    for (const llm of pool) {
+  /**
+   * One model per goal unless a comparison was asked for.
+   *
+   * Attempting every goal with every model doubles the run to answer a question you
+   * rarely need twice. Dealt round-robin instead, both models still work and no goal
+   * is executed twice — and `compare` remains available for when the head-to-head is
+   * the point.
+   */
+  const pairs: Array<{ goal: (typeof goals)[number]; llm: LLM }> =
+    options.pairing === "cross-product"
+      ? goals.flatMap((goal) => pool.map((llm) => ({ goal, llm })))
+      : goals.map((goal, index) => ({
+          goal,
+          llm: pool[index % pool.length]!,
+        }));
+
+  {
+    for (const { goal, llm } of pairs) {
       const base = goal.id.replace(/^reg-\d+-/, "");
       scenarios.push({
         // The model belongs in the id when there is more than one, or two
         // journeys for the same goal would collide in the report and one would
         // silently overwrite the other.
+        // The model goes in the id only when the same goal appears more than once,
+        // which now only happens in a comparison run.
         id:
-          pool.length > 1
+          options.pairing === "cross-product" && pool.length > 1
             ? `live-${base}-${shortModelName(llm.name)}`
             : `live-${base}`,
-        title:
-          pool.length > 1
-            ? `${goal.title} — ${llm.name}`
-            : `${goal.title} — live agent`,
+        title: `${goal.title} — ${llm.name}`,
         category: goal.category,
         driver: "agent" as const,
         assignedModel: llm.name,

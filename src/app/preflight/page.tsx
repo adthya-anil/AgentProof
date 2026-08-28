@@ -55,16 +55,14 @@ export default async function PreflightPage({
             )}
           </div>
           <div>
-            <span>Razorpay</span>
+            <span>Payments</span>
             {/*
-              Says only whether credentials exist, because that is all this panel
-              can honestly know. Whether a run *uses* them is chosen per run, and
-              is reported by the run itself. Printing the adapter name here made
-              the page claim every journey hit Razorpay when none did.
+              Preflight is simulated, always. Saying so here removes the question
+              rather than leaving a reader to wonder whether a 30-journey run just
+              created 30 unpayable orders in their Razorpay account.
             */}
-            {engine.razorpayConfigured
-              ? `test keys present (${engine.razorpayKeyId})`
-              : "not configured"}
+            simulated
+            {engine.razorpayConfigured ? " — real payments on /live" : ""}
           </div>
           <div>
             <span>Policy</span>

@@ -5,6 +5,11 @@ import { extractJson, LlmError } from "../agent/llm.js";
 import { encodeStrategy, type ScriptedStrategy } from "../agent/scripted.js";
 import { SEED_CATALOG } from "../hamperhub/catalog.js";
 import { describeAgentRun } from "./describeRun.js";
+import {
+  describeIntel,
+  EMPTY_INTEL,
+  type GeneratorIntel,
+} from "./intel.js";
 import { PROMOS } from "../hamperhub/pricing.js";
 import { TOOL_DECLARATIONS } from "../hamperhub/tools.js";
 import type { Policy } from "../policy/schema.js";
@@ -68,8 +73,15 @@ export interface GenerateOptions {
   policy: Policy;
   /** Upper bound on how many scenarios to generate. */
   count?: number;
-  /** Prior failing invariants, so the generator can probe nearby behaviour. */
-  priorFailures?: string[];
+  /**
+   * What the last run revealed, so the adversary aims rather than guesses.
+   *
+   * This was `priorFailures?: string[]` and every caller passed an empty array, so
+   * the prompt's "recent failures worth probing near" line never appeared. The
+   * generator was producing variety with no knowledge of where the shop was weak or
+   * which rules nothing had reached.
+   */
+  intel?: GeneratorIntel;
   maxToolCalls?: number;
 }
 
@@ -117,7 +129,7 @@ async function generateWithLlm(
   options: GenerateOptions,
   target: number,
 ): Promise<GeneratedScenario[]> {
-  const system = buildGeneratorPrompt(options.policy, options.priorFailures ?? []);
+  const system = buildGeneratorPrompt(options.policy, options.intel ?? EMPTY_INTEL);
   const completion = await options.llm.complete({
     system,
     messages: [
@@ -152,7 +164,7 @@ async function generateWithLlm(
   return valid.slice(0, target);
 }
 
-function buildGeneratorPrompt(policy: Policy, priorFailures: string[]): string {
+function buildGeneratorPrompt(policy: Policy, intel: GeneratorIntel): string {
   const products = SEED_CATALOG.map(
     (p) =>
       `${p.id} (${p.category}, ₹${p.priceMinor / 100}` +
@@ -190,7 +202,7 @@ Promotion codes: ${promos}
 
 Catalog:
 ${products}
-${priorFailures.length ? `\nRecent failures worth probing near: ${priorFailures.join(", ")}` : ""}
+${describeIntel(intel)}
 
 Each scenario needs: id (kebab-case), title, category (normal|boundary|\
 adversarial|state_perturbation), utterance (what the buyer says in natural \

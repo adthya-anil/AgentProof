@@ -1,7 +1,13 @@
-import { describePool, llmFromEnv, llmPoolFromEnv } from "@/lib/agent/factory";
+import {
+  assignRoles,
+  describePool,
+  llmFromEnv,
+  llmPoolFromEnv,
+} from "@/lib/agent/factory";
 import { loadDotEnv } from "@/lib/core/env";
 import { toMajor } from "@/lib/core/money";
-import { recordRun } from "@/lib/dashboard/runStore";
+import { getLatestRun, recordRun } from "@/lib/dashboard/runStore";
+import { EMPTY_INTEL, intelFrom } from "@/lib/scenarios/intel.js";
 import { MutationSet } from "@/lib/hamperhub/mutations";
 import { razorpayFromEnv } from "@/lib/harness";
 import { loadPolicyFromFile } from "@/lib/policy/load";
@@ -31,6 +37,13 @@ export async function GET(request: Request): Promise<Response> {
     url.searchParams.get("variant") === "fixed" ? "fixed" : "vulnerable";
   const generatedCount = clamp(url.searchParams.get("generated"), 9, 0, 12);
   const mode = parseMode(url.searchParams.get("mode"));
+  /**
+   * Three named sizes, because five independent dropdowns asked a developer to
+   * assemble a sensible run out of parts. Each preset is a defensible whole.
+   */
+  const size = parseSize(url.searchParams.get("size"));
+  const preset = PRESETS[size];
+  const roleMode = preset.roleMode;
   // Comma-separated regression ids. Not surfaced in the UI, but it makes a
   // single live journey cheap to reproduce from a shell or a CI step.
   const liveGoals = (url.searchParams.get("liveGoals") ?? "")
@@ -56,28 +69,34 @@ export async function GET(request: Request): Promise<Response> {
 
       try {
         /**
-         * Payments: simulated unless real ones are asked for.
+         * Preflight is always simulated, and that is not a limitation.
          *
-         * This route used to build a Razorpay adapter, print its name in the
-         * header, and then never pass it to the runner — so the report announced
-         * "razorpay test mode (rzp_test_…)" while every journey ran against the
-         * simulated provider. A false claim about money is the single worst thing
-         * this tool could put on a screen.
+         * Real payments were offered here and it was a mistake. A suite creates
+         * dozens of payment links and no human is going to pay them, so every
+         * journey ends with an uncaptured payment — which means:
          *
-         * Simulated stays the default because a suite is dozens of journeys and a
-         * real order per checkout is a lot of live side effects. But the label now
-         * describes what actually happened, and real can be chosen deliberately.
+         *  - `INV-PAYMENT-STATE` fires on journeys that did nothing wrong, adding
+         *    ₹5,644 of "money at risk, prevented" to a 12-journey run. Nothing was at
+         *    risk. That was 43% of the headline figure, fabricated.
+         *  - Defect detection *drops*, from 3 unsafe violations to 2, because
+         *    scenarios that need a provider timeout cannot run against a real one.
+         *  - Healthy journeys can never complete, so the signal that a correct
+         *    integration works disappears entirely.
+         *
+         * A worse report and a Razorpay account full of junk orders, in exchange for
+         * proving only that the API can be called. `/live` proves that properly, with
+         * one link a person actually pays, and `npm run demo:razorpay` does it from a
+         * terminal.
          */
-        const wantsRealPayments = url.searchParams.get("payments") === "razorpay";
-        const realPayments = wantsRealPayments ? razorpayFromEnv() : null;
-
-        if (wantsRealPayments && !realPayments) {
+        if (url.searchParams.get("payments") === "razorpay") {
           send({
             kind: "error",
             message:
-              "Real payments were requested but RAZORPAY_KEY_ID and " +
-              "RAZORPAY_KEY_SECRET are not both set. Nothing was substituted — a " +
-              "run labelled as using Razorpay must actually use it.",
+              "Preflight runs on the simulated provider. A suite creates dozens of " +
+              "payment links nobody will pay, which inflates money-at-risk with " +
+              "amounts that were never at risk and stops the timeout scenarios from " +
+              "running at all. To make a real Razorpay payment, use the Live agent " +
+              "tab — one journey, one link, and the page syncs when you pay it.",
           });
           controller.enqueue(encoder.encode("event: end\ndata: {}\n\n"));
           controller.close();
@@ -109,12 +128,21 @@ export async function GET(request: Request): Promise<Response> {
           return;
         }
 
+        const { adversary, buyers } = assignRoles(pool, roleMode);
+
+        /**
+         * What the previous run revealed, handed to the adversary.
+         *
+         * Generation had always accepted this and never received it, so each run
+         * invented goals with no knowledge of where the shop was already weak or
+         * which rules nothing had reached. Feeding it back makes a second run aim at
+         * what survived the first instead of re-rolling the dice.
+         */
+        const previous = await getLatestRun(variant);
+        const intel = previous ? intelFrom(previous.suite) : EMPTY_INTEL;
+
         const policy = loadPolicyFromFile();
-        // Describes what the journeys will really use, not what is merely
-        // configured in the environment.
-        const paymentAdapter = realPayments
-          ? `razorpay test mode (${process.env.RAZORPAY_KEY_ID})`
-          : "simulated (no real payment calls)";
+        const paymentAdapter = "simulated (no real payment calls)";
 
         send({
           kind: "start",
@@ -123,16 +151,29 @@ export async function GET(request: Request): Promise<Response> {
           model: llm.name,
           modelIsReal: llm.isReal,
           pool: pool.map((m) => m.name),
+          size,
+          roles: roleMode,
+          adversaryModel: adversary?.name ?? null,
+          buyerModels: buyers.map((m) => m.name),
+          intel: {
+            tripped: intel.tripped.length,
+            neverExercised: intel.neverExercised.length,
+            survived: intel.survived.length,
+          },
           paymentAdapter,
         });
 
         send({ kind: "phase", note: "Generating scenarios" });
         const assembled = await assembleSuite({
           llm,
-          llms: pool,
+          llms: buyers.length > 0 ? buyers : pool,
+          ...(adversary ? { adversary } : {}),
+          intel,
           policy,
-          generatedCount,
-          mode,
+          generatedCount: preset.generated,
+          mode: preset.mode,
+          roleMode: preset.roleMode,
+          includePerturbations: preset.perturbations,
           ...(liveGoals.length > 0 ? { liveGoals } : {}),
         });
 
@@ -157,8 +198,6 @@ export async function GET(request: Request): Promise<Response> {
         });
 
         const suite = await runSuite(assembled.scenarios, {
-          // The provider the journeys actually talk to.
-          ...(realPayments ? { paymentProvider: realPayments } : {}),
           mutations:
             variant === "vulnerable"
               ? MutationSet.vulnerable()
@@ -191,6 +230,25 @@ export async function GET(request: Request): Promise<Response> {
               providerOrders: journey.providerOrders,
               toolPath: journey.toolPath,
               durationMs: journey.durationMs,
+              /**
+               * A compact account of what happened, so each row is explorable in
+               * place. Types and reasons only — the full payloads live on the replay
+               * page, and shipping them for every journey would make the stream
+               * heavy for detail most rows never need opened.
+               */
+              steps: journey.auditTrail.map((e) => ({
+                seq: e.seq,
+                type: e.type,
+                tool: e.toolName,
+                reason: e.reason,
+                decision: e.decision,
+              })),
+              violations: journey.violations.map((v) => ({
+                invariant: v.invariantId,
+                severity: v.severity,
+                message: v.message,
+                remediation: v.remediation,
+              })),
             });
           },
         });
@@ -260,6 +318,44 @@ function clamp(
   const value = Number(raw);
   if (!Number.isFinite(value)) return fallback;
   return Math.min(max, Math.max(min, Math.trunc(value)));
+}
+
+/**
+ * What each preset actually runs.
+ *
+ * Quick is the default because the expensive half of a suite is the live-agent
+ * journeys, and a first run should be readable in one screen rather than a
+ * five-minute commitment. Compare is the only preset that attempts a goal twice, and
+ * it says so in its name.
+ */
+const PRESETS = {
+  quick: {
+    mode: "deterministic" as SuiteMode,
+    roleMode: "split" as const,
+    generated: 3,
+    perturbations: false,
+    label: "15 journeys — 12 fixed repros + 3 AI-invented",
+  },
+  standard: {
+    mode: "both" as SuiteMode,
+    roleMode: "split" as const,
+    generated: 3,
+    perturbations: true,
+    label: "30 journeys — adds live-agent replays and transport faults",
+  },
+  compare: {
+    mode: "both" as SuiteMode,
+    roleMode: "compare" as const,
+    generated: 3,
+    perturbations: true,
+    label: "45 journeys — every goal attempted by every model",
+  },
+} as const;
+
+type RunSize = keyof typeof PRESETS;
+
+function parseSize(raw: string | null): RunSize {
+  return raw === "standard" || raw === "compare" ? raw : "quick";
 }
 
 function parseMode(raw: string | null): SuiteMode {

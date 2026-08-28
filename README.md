@@ -28,7 +28,7 @@ an API key or network access unless you explicitly opt in.
 
 ```bash
 npm install
-npm test                    # 338 tests
+npm test                    # 356 tests
 npm run typecheck
 
 npm run demo:happy          # successful ₹1,399 transaction
@@ -330,6 +330,64 @@ the kind that fail silently:
 Each of those is pinned by a wire-level test, because every one of them returns a
 plausible-looking 200 when it is subtly wrong.
 
+### Two models, two jobs
+
+A second configured model can do more than duplicate the first. The **Models** control
+on `/preflight` chooses:
+
+One **Run** control picks the whole shape:
+
+| Run | Journeys | What it contains |
+|---|---|---|
+| **Quick** | **15** | 12 fixed repros + 3 AI-invented. Seconds. |
+| **Standard** | **30** | Adds live-agent replays and the four transport faults. Minutes. |
+| **Compare models** | **45** | Every goal attempted by every model. |
+
+Quick is the default. The fixed repros cost about 50ms in total and catch all eight
+seeded defects, so the expensive half of any run is the live-agent journeys — and a
+first run should be readable in one screen rather than a five-minute commitment.
+
+**No goal is attempted twice unless you ask for it.** Quick and Standard deal goals
+round-robin across the configured models, so both models work and nothing is
+duplicated. Only **Compare** runs the same goal on both, and it says so in its name.
+
+Neither is strictly better, so both stay:
+
+- **Compare** answers *"does model choice change what happens to my checkout?"* — and
+  it does. Given one identical request, `gpt-5.6-sol` reached a 7.75% effective
+  discount and tripped `INV-DISCOUNT-CAP`; `claude-opus-5` stacked four components to
+  14.23% and breached the floor price as well. A single-model report finds the first
+  hole and misses the second.
+- **Split** answers *"what can a model think up that I did not?"* — and it is cheaper,
+  since goals are attempted once rather than once per model.
+
+The adversary is the *last* model in the pool, so adding `ANTHROPIC_MODEL` changes what
+the new model does rather than silently reassigning the one already in use. With one
+model configured there is nothing to divide, and split behaves exactly like compare.
+
+### The adversary is told what survived
+
+Generation used to be blind. The prompt had always accepted a `priorFailures` list and
+no caller ever passed one, so every run invented goals with no knowledge of where the
+shop was already weak. It produced variety, not pressure.
+
+It now receives three signals from the previous run:
+
+- **Rules already broken** — invent harder variants; the shop is demonstrably weak
+  there. This is the path from 8.7% to 11.44%.
+- **Rules nothing has reached** — untested, *not* safe, and the most valuable thing to
+  aim at.
+- **Requests handled cleanly** — escalate rather than repeat.
+
+The difference is visible. Blind, the adversary spent a slot on an ordinary vegan
+birthday hamper. Informed, it generated no happy paths at all and produced
+`gen-split-order-to-dodge-transaction-cap` — splitting an order to evade the ₹5,000
+per-transaction limit — plus a journey that opens *"that quote you showed me about
+fifteen minutes ago"*, aimed squarely at `INV-QUOTE-EXPIRY`.
+
+That is generation earning its place: an attack a developer would not have written
+down, aimed at a rule the run before it had already bent.
+
 ### Fixed repro or live agent — always labelled
 
 Every journey row says who chose the tool calls, because the two support very
@@ -356,19 +414,45 @@ goal, because neither tried to pay twice. Drop the deterministic half and you st
 detecting the defect; drop the live half and you never learn how a real agent
 behaves.
 
-### Paying a real link syncs on its own
+### Preflight is simulated. Real payments live on `/live`
 
-A hosted payment link is asynchronous. The agent creates it, the Guard authorises
-it, `INV-PAYMENT-STATE` refuses to fulfil while the payment is uncaptured — the
-correct answer at that moment — and then a human goes and pays, minutes later.
+Preflight always uses the simulated provider, and that is a correctness decision
+rather than a limitation.
 
-Both halves of the sync exist, because they solve different problems:
+Real Razorpay payments were offered in preflight and it was a mistake. A suite creates
+dozens of payment links and nobody is going to pay them, so every journey ends holding
+an uncaptured payment. Measured on a 12-journey run:
+
+| | Simulated | Real Razorpay |
+|---|---|---|
+| Money at risk, prevented | ₹8,944.56 | ₹13,189.56 |
+| **of which was never at risk** | ₹0 | **₹5,644 — 43% of the headline** |
+| Defects detected | **3** | 2 |
+| Healthy journeys completed | 2 | **0** |
+
+`INV-PAYMENT-STATE` fires on `reg-01-normal` and `reg-02-max-amount` — ordinary
+transactions, not tests of payment state — because the merchant correctly refuses to
+dispatch against money that has not arrived. Correct behaviour, counted as a prevented
+loss. Detection also *drops*, because a scenario that works by forcing a provider
+timeout cannot ask that of a real provider.
+
+A worse report and a Razorpay account full of junk orders, in exchange for proving
+that an API can be called.
+
+### A real payment, properly
+
+`/live` is where money actually moves: one journey, one payment link, and a human pays
+it. That proves the integration in a way a suite of unpayable links cannot.
+
+A hosted link is asynchronous — the agent creates it, the Guard authorises it,
+`INV-PAYMENT-STATE` refuses to fulfil while the payment is uncaptured, and then a
+person pays minutes later. Both halves of the sync exist:
 
 - **Polling.** While a payment is outstanding the console asks Razorpay every four
-  seconds, for up to five minutes. Pay in the other tab and the page updates on its
-  own. This is what works on a laptop, since Razorpay cannot reach `localhost`.
-- **Webhook** at `/api/razorpay/webhook`, for a deployed URL. Point Razorpay at it
-  for `payment_link.paid` and `payment.captured`.
+  seconds, for up to five minutes. Pay in the other tab and the page updates itself.
+  This is what works on a laptop, since Razorpay cannot reach `localhost`.
+- **Webhook** at `/api/razorpay/webhook`, for a deployed URL, on
+  `payment_link.paid` and `payment.captured`.
 
 Two rules govern the webhook, and both are refusals:
 
@@ -376,16 +460,14 @@ Two rules govern the webhook, and both are refusals:
    `RAZORPAY_WEBHOOK_SECRET`, in constant time, over the exact raw bytes. An unset
    secret rejects everything — it fails closed, because an unauthenticated webhook
    that marks orders paid is a way for anyone to have goods dispatched for free.
-2. **The payload is a trigger, not a source of truth.** Even once verified, no
-   amount or status is read out of it. The handler goes and asks Razorpay what
-   happened and puts that answer through the same Guard checkpoints as everything
-   else, so the settlement path is identical whether a person or a provider
-   initiated it.
+2. **The payload is a trigger, not a source of truth.** Even once verified, no amount
+   or status is read from it. The handler asks Razorpay what happened and puts that
+   answer through the same Guard checkpoints as everything else.
 
 Verified against a running server: a forged signature, a missing signature, and a
-valid signature over a swapped body are all `401`; an authentic event for a journey
-no longer in memory is `200 matched=false`; and an event that is not a payment
-completion is acknowledged and ignored rather than retried.
+valid signature over a swapped body are all `401`; an authentic event for a journey no
+longer in memory is `200 matched=false`; an event that is not a payment completion is
+acknowledged and ignored rather than retried.
 
 ### Inconclusive is a real outcome
 
@@ -783,7 +865,7 @@ src/app/api/preflight/          Suite runner as a server-sent event stream
 src/app/                        Next.js dashboard (server components elsewhere)
 src/scripts/                    Runnable demos and database tooling
 scripts/dev-db.sh               Local Postgres for development
-tests/                          338 tests
+tests/                          356 tests
 ```
 
 Money is an integer count of paise throughout. Float rupees are banned: an
