@@ -44,7 +44,18 @@ export class OpenAICompatibleLLM implements LLM {
       /\/$/,
       "",
     );
-    this.timeoutMs = config.timeoutMs ?? 30_000;
+    /**
+     * Generous, and deliberately the same as the Anthropic adapter's.
+     *
+     * 30s was fine for `gpt-4o-mini` and wrong for a reasoning deployment. A
+     * scenario-generation call on `gpt-5.6-sol` thinks for a while before it
+     * emits any JSON, and a tight ceiling turns a healthy call into a "timeout",
+     * then two retries, then a silent fall back to the scripted scenario set —
+     * so the run appears to hang for ninety seconds and then quietly stops being
+     * AI-generated at all. Failing slowly and honestly beats failing fast and
+     * lying about what produced the suite.
+     */
+    this.timeoutMs = config.timeoutMs ?? 120_000;
     this.maxRetries = config.maxRetries ?? 2;
   }
 
