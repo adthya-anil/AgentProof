@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { describeEngine } from "../src/lib/dashboard/data.js";
 import { type CompletionResult, type LLM, LlmError } from "../src/lib/agent/llm.js";
 import { createEnvironment } from "../src/lib/harness.js";
 import { ScriptedLLM } from "../src/lib/agent/scripted.js";
@@ -254,6 +255,44 @@ describe("documented knobs actually do something", () => {
     const explicit = createEnvironment({ seed: "from-code" }).ids.next("quote");
     const fromEnv = createEnvironment().ids.next("quote");
     expect(explicit).not.toBe(fromEnv);
+  });
+});
+
+describe("the engine panel reports the whole pool", () => {
+  /**
+   * `describeEngine` returned only the primary adapter, so a correctly configured
+   * second model was invisible until a run was already underway — making the only
+   * way to verify your configuration to spend tokens on it. The singular "Model"
+   * label then read as confirmation that one model was all there should be.
+   */
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("names every configured model", () => {
+    vi.stubEnv("LLM_ADAPTER", "openai");
+    vi.stubEnv("LLM_API_KEY", "k");
+    vi.stubEnv("LLM_MODEL", "gpt-5.6-sol");
+    vi.stubEnv("ANTHROPIC_MODEL", "claude-opus-5");
+
+    expect(describeEngine().pool).toEqual([
+      "openai:gpt-5.6-sol",
+      "anthropic:claude-opus-5",
+    ]);
+  });
+
+  it("reports an empty pool rather than inventing a model", () => {
+    vi.stubEnv("LLM_ADAPTER", "scripted");
+    vi.stubEnv("LLM_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_MODEL", "");
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+
+    expect(describeEngine().pool).toEqual([]);
+  });
+
+  it("never throws on a broken configuration, because it renders a page", () => {
+    vi.stubEnv("LLM_ADAPTER", "nonsense-adapter");
+    expect(() => describeEngine()).not.toThrow();
   });
 });
 
