@@ -373,7 +373,15 @@ describe("the limitations section describes real limitations", () => {
      */
     expect(README).toMatch(/Cross-process safety is opt-in/);
     expect(README).not.toMatch(/Concurrency is now fully distributed/i);
-    expect(README).toMatch(/One merchant, one policy/);
+    /**
+     * There are two merchants now, so the old wording would be false. What must stay
+     * admitted is the part that is still true: both merchants are ours, and neither has
+     * the pagination, rate limits or eventual consistency of a real storefront. The
+     * assertion moved with the fact rather than being deleted along with it.
+     */
+    expect(README).toMatch(/Two merchants, one policy/);
+    expect(README).toMatch(/both merchants are still \*ours\*/);
+    expect(README).not.toMatch(/works against any merchant in production/i);
     expect(README).toMatch(/Testing cannot prove absence of defects/);
     expect(README).toMatch(/Two models is two, not a survey/);
     expect(README).toMatch(/Live-agent recall is not a stable measurement/);
