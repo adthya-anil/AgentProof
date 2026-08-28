@@ -28,7 +28,7 @@ an API key or network access unless you explicitly opt in.
 
 ```bash
 npm install
-npm test                    # 505 tests (2 need DATABASE_URL)
+npm test                    # 507 tests (2 need DATABASE_URL)
 npm run typecheck
 
 npm run demo:happy          # successful ₹1,399 transaction
@@ -369,6 +369,10 @@ everything a mapping has to survive:
 | allergens | `allergens: []` | `dietary.contains: "milk, soy"`, or absent |
 | price version | monotonic counter | **none** |
 | reservations | yes | **none** |
+
+In the dashboard, **Merchants** runs it in a browser — the capability table, the
+translated catalogue, a clean journey, and the re-price being caught. Or from a
+terminal:
 
 ```
 npm run build && npm start
@@ -1127,7 +1131,7 @@ src/app/api/preflight/          Suite runner as a server-sent event stream
 src/app/                        Next.js dashboard (server components elsewhere)
 src/scripts/                    Runnable demos and database tooling
 scripts/dev-db.sh               Local Postgres for development
-tests/                          505 tests
+tests/                          507 tests
 ```
 
 Money is an integer count of paise throughout. Float rupees are banned: an
