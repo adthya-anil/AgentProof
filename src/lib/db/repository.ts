@@ -6,6 +6,7 @@ import { SEED_CATALOG, SEED_INVENTORY } from "../hamperhub/catalog.js";
 import { TOOL_DECLARATIONS } from "../hamperhub/tools.js";
 import { ALL_INVARIANTS } from "../policy/invariants/index.js";
 import type { Policy } from "../policy/schema.js";
+import type { JourneyCommerce } from "../runner/run.js";
 import type { Violation } from "../policy/violations.js";
 import type { JourneyResult, SuiteResult } from "../runner/run.js";
 import type { Db } from "./client.js";
@@ -160,6 +161,7 @@ async function insertJourney(
   await insertViolations(client, testRunId, journey.violations, "violation");
   await insertViolations(client, testRunId, journey.escalations, "escalation");
   await insertAuditEvents(client, testRunId, journey.auditTrail);
+  await insertCommerce(client, testRunId, journey.commerce);
 
   return testRunId;
 }
@@ -215,6 +217,136 @@ async function insertToolExecutions(
         JSON.stringify(event.input ?? {}),
         !failed,
         outcome?.reason ?? (failed ? "no outcome recorded" : "ok"),
+      ],
+    );
+  }
+}
+
+/**
+ * The commerce lifecycle: quotes, receipts, checkout intents, payments, orders.
+ *
+ * These five tables were in the schema from the start and written by nothing, so a
+ * reader querying `checkout_intents` for what a run bought got an empty set and a
+ * partial unique index on that table protected nothing at all. Money comes straight off
+ * the entities in minor units — never from audit `output` blobs, which are
+ * `toMajor()`-rounded for display and would silently lose paise.
+ */
+async function insertCommerce(
+  client: PoolClient,
+  testRunId: string,
+  commerce: JourneyCommerce,
+): Promise<void> {
+  for (const q of commerce.quotes) {
+    await client.query(
+      `insert into quotes (id, test_run_id, version, intent_id, currency, line_items,
+                           subtotal_minor, discounts, total_discount_minor, total_minor,
+                           policy_version, reservation_id, status, created_at, expires_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       on conflict (test_run_id, id) do nothing`,
+      [
+        q.id,
+        testRunId,
+        q.version,
+        q.intentId,
+        q.currency,
+        JSON.stringify(q.lineItems ?? []),
+        q.subtotalMinor,
+        JSON.stringify(q.discounts ?? []),
+        q.totalDiscountMinor,
+        q.totalMinor,
+        q.policyVersion,
+        q.reservationId ?? null,
+        q.status,
+        q.createdAt.toISOString(),
+        q.expiresAt.toISOString(),
+      ],
+    );
+  }
+
+  for (const a of commerce.approvals) {
+    await client.query(
+      `insert into approval_receipts (id, test_run_id, quote_id, quote_version, intent_id,
+                                     approved_amount_minor, currency, confirmation_text,
+                                     approved_content_hash, policy_version, created_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       on conflict (test_run_id, id) do nothing`,
+      [
+        a.id,
+        testRunId,
+        a.quoteId,
+        a.quoteVersion,
+        a.intentId,
+        a.approvedAmountMinor,
+        a.currency,
+        a.confirmationText,
+        a.approvedContentHash,
+        a.policyVersion,
+        a.createdAt.toISOString(),
+      ],
+    );
+  }
+
+  for (const c of commerce.checkoutIntents) {
+    await client.query(
+      `insert into checkout_intents (id, test_run_id, intent_id, quote_id, quote_version,
+                                    approval_receipt_id, idempotency_key, amount_minor,
+                                    currency, status, created_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       on conflict (test_run_id, id) do nothing`,
+      [
+        c.id,
+        testRunId,
+        c.intentId,
+        c.quoteId,
+        c.quoteVersion,
+        c.approvalReceiptId ?? null,
+        c.idempotencyKey,
+        c.amountMinor,
+        c.currency,
+        c.status,
+        c.createdAt.toISOString(),
+      ],
+    );
+  }
+
+  for (const p of commerce.paymentAttempts) {
+    await client.query(
+      `insert into payment_attempts (id, test_run_id, checkout_intent_id, provider_order_id,
+                                    provider_payment_id, amount_minor, currency, status,
+                                    verified, hosted_url, created_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       on conflict (test_run_id, id) do nothing`,
+      [
+        p.id,
+        testRunId,
+        p.checkoutIntentId,
+        p.providerOrderId,
+        p.providerPaymentId ?? null,
+        p.amountMinor,
+        p.currency,
+        p.status,
+        p.verified,
+        p.hostedUrl ?? null,
+        p.createdAt.toISOString(),
+      ],
+    );
+  }
+
+  for (const o of commerce.orders) {
+    await client.query(
+      `insert into orders (id, test_run_id, checkout_intent_id, payment_attempt_id,
+                           amount_minor, currency, status, created_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8)
+       on conflict (test_run_id, id) do nothing`,
+      [
+        o.id,
+        testRunId,
+        o.checkoutIntentId,
+        o.paymentAttemptId,
+        o.amountMinor,
+        o.currency,
+        o.status,
+        o.createdAt.toISOString(),
       ],
     );
   }

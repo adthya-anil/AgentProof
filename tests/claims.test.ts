@@ -64,8 +64,8 @@ describe("the README's structural claims match the code", () => {
   it("counts database tables correctly", () => {
     const schema = readFileSync("src/lib/db/schema.sql", "utf8");
     const tables = schema.match(/^CREATE TABLE/gm) ?? [];
-    expect(tables).toHaveLength(17);
-    expect(README).toMatch(/17 tables|seventeen tables/i);
+    expect(tables).toHaveLength(18);
+    expect(README).toMatch(/18 tables|eighteen tables/i);
   });
 
   /**
@@ -366,7 +366,13 @@ describe("the limitations section describes real limitations", () => {
   it("still admits the limitations that are genuinely still true", () => {
     // Guards against the opposite error: quietly deleting an inconvenient caveat.
     // Each of these remains true and must stay stated.
-    expect(README).toMatch(/Concurrency is single-process/);
+    /**
+     * Cross-process safety exists now, but it is opt-in — the default is still the
+     * single-process guarantee. The caveat that must stay stated is therefore the
+     * conditional one, and it must not be replaced with an unqualified claim.
+     */
+    expect(README).toMatch(/Cross-process safety is opt-in/);
+    expect(README).not.toMatch(/Concurrency is now fully distributed/i);
     expect(README).toMatch(/One merchant, one policy/);
     expect(README).toMatch(/Testing cannot prove absence of defects/);
     expect(README).toMatch(/Two models is two, not a survey/);

@@ -2,6 +2,8 @@ import { llmFromEnv, llmPoolFromEnv } from "../agent/factory.js";
 import { describeAdapter, selectPaymentAdapter } from "../payments/factory.js";
 import { IdFactory } from "../core/ids.js";
 import { ManualClock } from "../core/clock.js";
+import { Db } from "../db/client.js";
+import { concurrencyBackendsFromDb } from "../db/concurrency.js";
 import {
   MUTATION_IDS,
   type MutationId,
@@ -96,6 +98,33 @@ export async function getJourney(
   return view?.suite.journeys.find((j) => j.scenarioId === scenarioId) ?? null;
 }
 
+/**
+ * Which locking and uniqueness implementations a run would use right now.
+ *
+ * Derived from configuration rather than from a live environment, so the panel can say
+ * it before anything runs — the same reason the model pool is reported up front.
+ */
+function describeConcurrency(): {
+  locks: string;
+  payableOrders: string;
+  crossProcess: boolean;
+} {
+  const db = Db.fromEnv();
+  if (!db) {
+    return {
+      locks: "in-process",
+      payableOrders: "in-process",
+      crossProcess: false,
+    };
+  }
+  const backends = concurrencyBackendsFromDb(db);
+  return {
+    locks: backends.locks.name,
+    payableOrders: backends.payableOrders.name,
+    crossProcess: true,
+  };
+}
+
 /** Describes the configured engine without running anything. */
 export function describeEngine(): {
   model: string;
@@ -107,6 +136,16 @@ export function describeEngine(): {
   razorpayKeyId: string | null;
   paymentAdapter: string;
   policyVersion: string;
+  /**
+   * Which concurrency guarantees are actually in force.
+   *
+   * Reported for the same reason the Razorpay line distinguishes "configured" from
+   * "in use": in-process locking is a real guarantee for one process and no guarantee
+   * at all for two, and a panel that stayed silent would let a reader assume the
+   * stronger one. `scope` is null when there is no database, because a claim namespace
+   * without a shared store to hold it means nothing.
+   */
+  concurrency: { locks: string; payableOrders: string; crossProcess: boolean };
 } {
   let model = "unconfigured";
   let modelIsReal = false;
@@ -155,6 +194,7 @@ export function describeEngine(): {
     pool,
     razorpayConfigured,
     razorpayKeyId: keyId ?? null,
+    concurrency: describeConcurrency(),
     paymentAdapter: describeAdapter(adapter),
     policyVersion: `${policy.policyId}`,
   };

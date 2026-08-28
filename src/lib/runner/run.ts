@@ -1,5 +1,12 @@
 import type { AuditEvent } from "../audit/events.js";
 import { type Minor, toMajor } from "../core/money.js";
+import type {
+  ApprovalReceipt,
+  CheckoutIntent,
+  Order,
+  PaymentAttempt,
+  Quote,
+} from "../core/types.js";
 import { createEnvironment, createIntent } from "../harness.js";
 import type { Environment, EnvironmentOptions } from "../harness.js";
 import type { MutationSet } from "../hamperhub/mutations.js";
@@ -105,6 +112,16 @@ export interface JourneyResult {
    * Full event trail for this journey, so a report or dashboard can replay it
    * without re-executing the scenario. Kept in memory: a journey is ~20 events.
    */
+  /**
+   * The commerce entities this journey actually created.
+   *
+   * Kept on the result for the same reason `auditTrail` is: the entities live in
+   * `HamperHubService`'s private Maps, and the environment is a local that becomes
+   * unreachable the moment `runScenario` returns. Five tables were declared in the
+   * schema and written by nothing because this field did not exist, so a report built
+   * from the normalised tables described a run in which nobody ever bought anything.
+   */
+  commerce: JourneyCommerce;
   auditTrail: readonly AuditEvent[];
   auditChainOk: boolean;
   durationMs: number;
@@ -496,6 +513,13 @@ export async function runScenario(
       msToFirstViolation,
       toolCallsToFirstViolation,
       duplicatePaymentsPrevented,
+      commerce: {
+        quotes: env.service.listQuotes(),
+        approvals: env.service.listApprovalReceipts(),
+        checkoutIntents: env.service.listCheckoutIntents(),
+        paymentAttempts: env.service.listPaymentAttempts(),
+        orders: env.service.listOrders(),
+      },
       auditTrail: events,
       auditChainOk: chain.ok,
       durationMs: Date.now() - startedAt,
@@ -536,12 +560,32 @@ function errorResult(
     msToFirstViolation: null,
     toolCallsToFirstViolation: null,
     duplicatePaymentsPrevented: 0,
+    // A journey that could not run created nothing, which is different from a journey
+    // that ran and bought nothing — the disposition already carries that distinction.
+    commerce: NO_COMMERCE,
     auditTrail: [],
     auditChainOk: true,
     durationMs: Date.now() - startedAt,
     error: error instanceof Error ? error.message : String(error),
   };
 }
+
+/** The commerce entities a single journey produced, for persistence and replay. */
+export interface JourneyCommerce {
+  quotes: Quote[];
+  approvals: ApprovalReceipt[];
+  checkoutIntents: CheckoutIntent[];
+  paymentAttempts: PaymentAttempt[];
+  orders: Order[];
+}
+
+const NO_COMMERCE: JourneyCommerce = {
+  quotes: [],
+  approvals: [],
+  checkoutIntents: [],
+  paymentAttempts: [],
+  orders: [],
+};
 
 export interface SuiteResult {
   runId: string;
