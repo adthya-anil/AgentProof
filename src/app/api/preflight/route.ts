@@ -3,9 +3,7 @@ import { loadDotEnv } from "@/lib/core/env";
 import { toMajor } from "@/lib/core/money";
 import { recordRun } from "@/lib/dashboard/runStore";
 import { MutationSet } from "@/lib/hamperhub/mutations";
-import { describeAdapter, selectPaymentAdapter } from "@/lib/payments/factory";
-import { IdFactory } from "@/lib/core/ids";
-import { ManualClock } from "@/lib/core/clock";
+import { razorpayFromEnv } from "@/lib/harness";
 import { loadPolicyFromFile } from "@/lib/policy/load";
 import { runSuite } from "@/lib/runner/run";
 import { assembleSuite, type SuiteMode } from "@/lib/scenarios/index";
@@ -57,6 +55,35 @@ export async function GET(request: Request): Promise<Response> {
       const startedAt = Date.now();
 
       try {
+        /**
+         * Payments: simulated unless real ones are asked for.
+         *
+         * This route used to build a Razorpay adapter, print its name in the
+         * header, and then never pass it to the runner — so the report announced
+         * "razorpay test mode (rzp_test_…)" while every journey ran against the
+         * simulated provider. A false claim about money is the single worst thing
+         * this tool could put on a screen.
+         *
+         * Simulated stays the default because a suite is dozens of journeys and a
+         * real order per checkout is a lot of live side effects. But the label now
+         * describes what actually happened, and real can be chosen deliberately.
+         */
+        const wantsRealPayments = url.searchParams.get("payments") === "razorpay";
+        const realPayments = wantsRealPayments ? razorpayFromEnv() : null;
+
+        if (wantsRealPayments && !realPayments) {
+          send({
+            kind: "error",
+            message:
+              "Real payments were requested but RAZORPAY_KEY_ID and " +
+              "RAZORPAY_KEY_SECRET are not both set. Nothing was substituted — a " +
+              "run labelled as using Razorpay must actually use it.",
+          });
+          controller.enqueue(encoder.encode("event: end\ndata: {}\n\n"));
+          controller.close();
+          return;
+        }
+
         const llm = llmFromEnv();
         // Every real model the environment can reach. When two families are
         // configured, each regression goal is attempted by both — a merchant does
@@ -83,10 +110,11 @@ export async function GET(request: Request): Promise<Response> {
         }
 
         const policy = loadPolicyFromFile();
-        const adapter = selectPaymentAdapter({
-          ids: new IdFactory("preflight"),
-          clock: new ManualClock(),
-        });
+        // Describes what the journeys will really use, not what is merely
+        // configured in the environment.
+        const paymentAdapter = realPayments
+          ? `razorpay test mode (${process.env.RAZORPAY_KEY_ID})`
+          : "simulated (no real payment calls)";
 
         send({
           kind: "start",
@@ -95,7 +123,7 @@ export async function GET(request: Request): Promise<Response> {
           model: llm.name,
           modelIsReal: llm.isReal,
           pool: pool.map((m) => m.name),
-          paymentAdapter: describeAdapter(adapter),
+          paymentAdapter,
         });
 
         send({ kind: "phase", note: "Generating scenarios" });
@@ -129,6 +157,8 @@ export async function GET(request: Request): Promise<Response> {
         });
 
         const suite = await runSuite(assembled.scenarios, {
+          // The provider the journeys actually talk to.
+          ...(realPayments ? { paymentProvider: realPayments } : {}),
           mutations:
             variant === "vulnerable"
               ? MutationSet.vulnerable()
@@ -171,7 +201,7 @@ export async function GET(request: Request): Promise<Response> {
           startedAt,
           model: describePool(pool),
           modelIsReal: pool.some((m) => m.isReal),
-          paymentAdapter: describeAdapter(adapter),
+          paymentAdapter,
           regressionCount: assembled.regressionCount,
           perturbationCount: assembled.perturbationCount,
           liveCount: assembled.liveCount,

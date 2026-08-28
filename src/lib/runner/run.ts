@@ -194,7 +194,28 @@ export async function runScenario(
     return errorResult(scenario, startedAt, error);
   }
 
-  if (scenario.faults && env.fake) env.fake.setFaults(scenario.faults);
+  /**
+   * Fault injection needs the simulated provider.
+   *
+   * A scenario like `reg-05-duplicate-payment` works by timing out the first
+   * order-creation attempt, and you cannot ask Razorpay to fail on demand. Rather
+   * than run it against a real provider and report a clean pass it never earned,
+   * the journey is refused outright — a scenario that cannot inject its fault has
+   * not tested the invariant it exists to test.
+   */
+  if (scenario.faults) {
+    if (!env.fake) {
+      return {
+        ...errorResult(scenario, startedAt, null),
+        disposition: "inconclusive" as const,
+        note:
+          "requires the simulated payment provider: this scenario works by " +
+          "forcing a provider timeout, which cannot be requested of Razorpay",
+        error: null,
+      };
+    }
+    env.fake.setFaults(scenario.faults);
+  }
 
   const intent = createIntent(env.ids, env.clock, {
     runId,
@@ -217,7 +238,22 @@ export async function runScenario(
 
     const violations = [...env.guard.recordedViolations()];
     const escalations = [...env.guard.recordedEscalations()];
-    const providerOrders = env.fake?.allOrders().length ?? 0;
+
+    /**
+     * Provider orders, counted from the audit trail rather than the fake.
+     *
+     * This used to read `env.fake?.allOrders().length ?? 0`, which is zero by
+     * construction whenever a real provider is wired in — so a journey that
+     * created genuine Razorpay orders reported having created none, and the
+     * duplicate-order column silently stopped working in exactly the
+     * configuration where a duplicate order costs actual money.
+     */
+    const providerOrders = env.audit
+      .all()
+      .filter(
+        (e) =>
+          e.type === "razorpay.order_created" || e.type === "payment.order_created",
+      ).length;
 
     // Only orders the merchant actually recorded as payable count as duplicates;
     // an order the provider created behind a timeout is reconciled, not charged.

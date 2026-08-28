@@ -296,6 +296,79 @@ describe("the engine panel reports the whole pool", () => {
   });
 });
 
+describe("payment claims match payment reality", () => {
+  /**
+   * The Engine panel reported the *configured* adapter, so a page on which no
+   * journey touched Razorpay announced "razorpay test mode (rzp_test_…)". The
+   * preflight route built that adapter purely to print its name and never passed
+   * it to the runner. A false claim about money is the worst thing this tool could
+   * put on a screen.
+   */
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("reports only that credentials exist, not that a run uses them", () => {
+    vi.stubEnv("RAZORPAY_KEY_ID", "rzp_test_abc123");
+    vi.stubEnv("RAZORPAY_KEY_SECRET", "secret");
+
+    const engine = describeEngine();
+    expect(engine.razorpayConfigured).toBe(true);
+    expect(engine.razorpayKeyId).toBe("rzp_test_abc123");
+  });
+
+  it("says not configured when either half of the pair is missing", () => {
+    vi.stubEnv("RAZORPAY_KEY_ID", "rzp_test_abc123");
+    vi.stubEnv("RAZORPAY_KEY_SECRET", "");
+    expect(describeEngine().razorpayConfigured).toBe(false);
+  });
+
+  /**
+   * `providerOrders` was counted off the simulated provider, so it was zero by
+   * construction whenever a real one was wired in — the duplicate-order column
+   * stopped working in exactly the configuration where a duplicate order costs
+   * real money. It is now counted from the audit trail, which both providers write.
+   */
+  it("counts provider orders from the audit trail, not the simulator", async () => {
+    const journey = await runScenario(REGRESSION_SCENARIOS[0]!, {
+      mutations: MutationSet.fixed(),
+    });
+    const fromTrail = journey.auditTrail.filter(
+      (e) =>
+        e.type === "razorpay.order_created" || e.type === "payment.order_created",
+    ).length;
+    expect(journey.providerOrders).toBe(fromTrail);
+    expect(journey.providerOrders).toBeGreaterThan(0);
+  });
+
+  /**
+   * You cannot ask Razorpay to time out on demand, so a fault-injection scenario
+   * run against a real provider has not tested its invariant. Refusing beats
+   * reporting a pass it never earned.
+   */
+  it("refuses a fault-injection scenario when no simulator is available", async () => {
+    const faulty = REGRESSION_SCENARIOS.find((s) => s.faults !== undefined)!;
+    const journey = await runScenario(faulty, {
+      mutations: MutationSet.vulnerable(),
+      // A stand-in for any real provider: its presence removes the simulator.
+      paymentProvider: {
+        name: "stub-real",
+        isReal: true,
+        createOrder: async () => {
+          throw new Error("must never be called");
+        },
+        fetchPayment: async () => {
+          throw new Error("must never be called");
+        },
+      } as never,
+    });
+
+    expect(journey.disposition).toBe("inconclusive");
+    expect(journey.note).toMatch(/requires the simulated payment provider/);
+    expect(journey.error).toBeNull();
+  });
+});
+
 describe("suite composition", () => {
   it("defaults to the deterministic suite so recall stays reproducible", async () => {
     const policy = loadPolicyFromFile();

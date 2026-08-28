@@ -53,8 +53,16 @@ export default async function PreflightPage({
             )}
           </div>
           <div>
-            <span>Payments</span>
-            {engine.paymentAdapter}
+            <span>Razorpay</span>
+            {/*
+              Says only whether credentials exist, because that is all this panel
+              can honestly know. Whether a run *uses* them is chosen per run, and
+              is reported by the run itself. Printing the adapter name here made
+              the page claim every journey hit Razorpay when none did.
+            */}
+            {engine.razorpayConfigured
+              ? `test keys present (${engine.razorpayKeyId})`
+              : "not configured"}
           </div>
           <div>
             <span>Policy</span>

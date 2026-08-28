@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
  */
 
 type Mode = "deterministic" | "agent" | "both";
+type Payments = "simulated" | "razorpay";
 type Driver = "deterministic" | "agent";
 
 interface ModelBreakdown {
@@ -67,6 +68,14 @@ export default function PreflightConsole({
 }) {
   const [variant, setVariant] = useState(initialVariant);
   const [mode, setMode] = useState<Mode>("both");
+  /**
+   * Simulated by default.
+   *
+   * A suite is dozens of journeys, and a real Razorpay order per checkout is a lot
+   * of live side effects to create by pressing one button. The important part is
+   * not the default but that the report says which one actually ran.
+   */
+  const [payments, setPayments] = useState<Payments>("simulated");
   const [generated, setGenerated] = useState(3);
   const [running, setRunning] = useState(false);
   const [phase, setPhase] = useState<string | null>(null);
@@ -100,6 +109,7 @@ export default function PreflightConsole({
     const params = new URLSearchParams({
       variant,
       mode,
+      payments,
       generated: String(generated),
     });
     const source = new EventSource(`/api/preflight?${params.toString()}`);
@@ -177,7 +187,7 @@ export default function PreflightConsole({
       setRunning(false);
       source.close();
     };
-  }, [variant, mode, generated]);
+  }, [variant, mode, payments, generated]);
 
   const stop = useCallback(() => {
     sourceRef.current?.close();
@@ -242,6 +252,18 @@ export default function PreflightConsole({
               <option value={3}>3</option>
               <option value={6}>6</option>
               <option value={9}>9</option>
+            </select>
+          </label>
+
+          <label className="check">
+            Payments
+            <select
+              value={payments}
+              onChange={(e) => setPayments(e.target.value as Payments)}
+              disabled={running}
+            >
+              <option value="simulated">Simulated</option>
+              <option value="razorpay">Real Razorpay test mode</option>
             </select>
           </label>
 
