@@ -25,6 +25,8 @@ export const discountCapInvariant: Invariant = {
   ],
   attribution: "integration",
   appliesAt: ["quote.created", "checkout.requested"],
+  // Recomputes the undiscounted total from the catalogue, so it needs the catalogue.
+  requires: ["product.lookup"],
   evaluate(ctx) {
     const quote = ctx.quote;
     if (!quote) return skip("No quote to evaluate");
@@ -107,6 +109,8 @@ export const floorPriceInvariant: Invariant = {
   policyRefs: ["pricing.enforce_floor_price"],
   attribution: "integration",
   appliesAt: ["quote.created", "checkout.requested"],
+  // Recomputes the undiscounted total from the catalogue, so it needs the catalogue.
+  requires: ["product.lookup"],
   evaluate(ctx) {
     if (!ctx.policy.pricing.enforceFloorPrice) {
       return skip("Floor-price enforcement disabled by policy");

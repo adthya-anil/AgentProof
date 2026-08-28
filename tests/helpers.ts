@@ -14,6 +14,7 @@ import type {
 import { MerchantState } from "../src/lib/hamperhub/state.js";
 import { loadPolicyFromYaml, policyVersion } from "../src/lib/policy/load.js";
 import type { Policy } from "../src/lib/policy/schema.js";
+import { CapabilitySet } from "../src/lib/policy/capabilities.js";
 import type { EvaluationContext } from "../src/lib/policy/invariants/types.js";
 
 export const POLICY_YAML = `
@@ -204,6 +205,9 @@ export function ctx(
     clock: f.clock,
     catalog: f.state,
     intent: f.intent,
+    // The fixture merchant is HamperHub, which does supply everything. Tests that
+    // care about capability gaps pass their own set.
+    capabilities: CapabilitySet.full(),
     quote: null,
     approval: null,
     checkoutIntent: null,

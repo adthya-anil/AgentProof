@@ -11,6 +11,7 @@ import {
   describeRejectedPromos,
   describeRuleCounts,
   describeSkipped,
+  describeWithheld,
 } from "@/lib/policy/describeCounts";
 import type {
   LiveEvent,
@@ -715,7 +716,11 @@ function toRow(event: SerialisedAuditEvent): Row | null {
           ? `Guard: ${describeRuleCounts(out)} at ${out.checkpoint}`
           : `Guard blocked at ${out.checkpoint}`,
         detail: clean
-          ? describeSkipped(out.skippedInvariants)
+          ? // A withheld rule outranks a merely-inapplicable one in the detail line.
+            // "3 not applicable" beside a silent coverage hole is the reading this
+            // whole helper exists to prevent.
+            (describeWithheld(out.withheldInvariants) ??
+            describeSkipped(out.skippedInvariants))
           : (event.reason ?? undefined),
         payload: clean ? undefined : [...violations, ...escalations],
       };

@@ -16,6 +16,7 @@ import type { MerchantState } from "../hamperhub/state.js";
 import { TOOL_SCHEMAS, type ToolName } from "../hamperhub/tools.js";
 import { PaymentProviderError } from "../payments/provider.js";
 import { type PolicyEngine, type PolicyEvaluation } from "../policy/engine.js";
+import { CapabilitySet } from "../policy/capabilities.js";
 import type { Checkpoint } from "../policy/invariants/types.js";
 import type { Policy } from "../policy/schema.js";
 import type { Violation } from "../policy/violations.js";
@@ -64,6 +65,15 @@ export interface GuardOptions {
    * money was ever in play.
    */
   paymentProvider?: { name: string; isReal: boolean };
+  /**
+   * What the merchant under test can actually supply.
+   *
+   * Defaults to the full set because the only merchant today is HamperHub, which is
+   * built to the spec's entity model and genuinely does expose every field. An adapter
+   * fronting a real catalogue declares less, and the engine then withholds the rules
+   * whose inputs are absent instead of running them against undefined.
+   */
+  capabilities?: CapabilitySet;
 }
 
 /**
@@ -752,6 +762,7 @@ export class Guard {
       checkoutIntent: parts.checkoutIntent ?? null,
       paymentAttempt: parts.paymentAttempt ?? null,
       priorCheckoutIntents: parts.priorCheckoutIntents ?? [],
+      capabilities: this.opts.capabilities ?? CapabilitySet.full(),
     });
 
     this.evaluations.push(evaluation);
@@ -775,8 +786,22 @@ export class Guard {
         // INV-PRODUCT-SAFETY skipping because no allergens were declared is
         // correct, whereas it skipping on an allergic buyer would be a hole.
         skippedInvariants: evaluation.results
-          .filter((r) => r.status === "skipped")
+          .filter((r) => r.status === "skipped" && !r.missingCapabilities)
           .map((r) => r.invariantId),
+        /**
+         * Rules that could not run here at all, kept separate from the ones that
+         * merely had nothing to say.
+         *
+         * Inside the audit output rather than alongside it, because the chain is what
+         * a merchant is asked to trust: a coverage gap that lives only in a dashboard
+         * can be forgotten, while one written into the hash chain is part of the
+         * record of what was and was not checked.
+         */
+        withheld: evaluation.unsupportedCount,
+        withheldInvariants: evaluation.capabilityGaps.map((gap) => ({
+          invariant: gap.invariantId,
+          missing: [...gap.missing],
+        })),
         violations: evaluation.violations.map((v) => ({
           invariant: v.invariantId,
           severity: v.severity,

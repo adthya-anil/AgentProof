@@ -25,6 +25,13 @@ export const priceBindingInvariant: Invariant = {
   ],
   attribution: "integration",
   appliesAt: ["checkout.requested"],
+  /**
+   * The rule is a version comparison, so without a version there is nothing to
+   * compare. Left to run against a merchant with no price version it would read
+   * undefined on both sides, find them equal, and report that the price is still
+   * bound — the single most expensive false pass this engine could produce.
+   */
+  requires: ["product.lookup", "product.priceVersion", "approval.contentHash"],
   evaluate(ctx) {
     const quote = ctx.quote;
     if (!quote) return skip("No quote to evaluate");

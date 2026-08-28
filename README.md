@@ -182,6 +182,66 @@ the true 8.7% regardless of how the merchant layered its promotions.
 
 ---
 
+## What each rule needs from a merchant
+
+Every invariant above assumes a merchant that carries the spec's entity model:
+products with a `priceVersion`, inventory records with a `version`, allergens as
+structured tri-state data. HamperHub does. Almost nothing in production does — a
+typical storefront has no price version, reports stock as a boolean, and keeps
+allergens in prose inside a description field.
+
+That leaves three options for a rule whose inputs are absent, and only one is
+honest:
+
+1. Let it read `undefined` and pass. A report then claims `12/12 green` while
+   the price-binding rule compared `undefined` to `undefined` and found them
+   equal. Silent false assurance about money, which is the exact failure this
+   product exists to prevent.
+2. Refuse to run without every field — correct, and useless. The Guard would only
+   work against merchants rebuilt to AgentProof's data model.
+3. Declare the requirement, withhold the rule, and say so.
+
+Option three. An invariant declares what it depends on, a merchant declares what
+it can supply, and the engine refuses to call `evaluate` at all when the inputs
+are missing:
+
+```ts
+export const priceBinding: Invariant = {
+  id: "INV-PRICE-BINDING",
+  appliesAt: ["checkout.requested"],
+  requires: ["product.lookup", "product.priceVersion", "approval.contentHash"],
+  ...
+```
+
+Measured across all five checkpoints, by what a merchant can answer:
+
+| merchant | rule-checkpoint pairs run | withheld | rules lost |
+|---|---|---|---|
+| HamperHub — full entity model | 24 | 0 | none |
+| typical GraphQL storefront | 19 | 5 | `INV-INVENTORY`, `INV-PRICE-BINDING`, `INV-PRODUCT-SAFETY` |
+| bare price list | 19 | 5 | same three |
+
+**A withheld rule is not a skipped rule, and the two are counted separately.**
+`INV-PAYMENT-STATE` skipping at `quote.created` is coverage working — it has
+nothing to say yet, and will run later. `INV-PRICE-BINDING` withheld for a
+missing price version will never run, at any checkpoint. Both are technically
+skips; reporting them as one number would let a merchant read a full green board
+while three rules never executed. So the audit entry carries
+`withheld` and `withheldInvariants` beside `skipped`, and the live console prints
+`could not run — merchant data missing: …` rather than `not applicable here`.
+
+A checkpoint where *every* applicable rule was withheld returns `not_applicable`,
+never `allow`. "Nothing objected" would be true and misleading: nothing ran.
+
+Two things keep the declarations from rotting. `tsc` rejects a capability that is
+not in the union, so a typo cannot become a requirement no merchant can satisfy.
+And a drift test greps each invariant's source: if the code reads `.priceVersion`
+without declaring `product.priceVersion`, the test names the file and the missing
+declaration. Verified by deliberately removing a declaration and confirming the
+failure, because a guard that cannot fail is decoration.
+
+---
+
 ## The autonomous buyer agent
 
 `src/lib/agent/` holds the agent that actually drives the journeys. It receives a

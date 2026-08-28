@@ -17,6 +17,8 @@ export interface RuleCounts {
   evaluated?: unknown;
   passed?: unknown;
   skipped?: unknown;
+  /** Rules withheld for missing merchant capabilities. Never "not applicable". */
+  withheld?: unknown;
 }
 
 /**
@@ -34,20 +36,47 @@ export function describeSkipped(value: unknown): string | undefined {
   return `not applicable here: ${names.join(", ")}`;
 }
 
+/**
+ * Names the rules that could not run against this merchant at all.
+ *
+ * Deliberately worded differently from `describeSkipped`. "Not applicable here" is a
+ * rule waiting for a later checkpoint; this is a rule that will never run, because the
+ * merchant cannot supply what it compares. A reader who cannot tell those apart cannot
+ * tell full coverage from a third of it.
+ */
+export function describeWithheld(value: unknown): string | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const names = value
+    .map((entry) => {
+      if (typeof entry === "string") return entry;
+      if (entry && typeof entry === "object" && "invariant" in entry) {
+        return String((entry as { invariant: unknown }).invariant);
+      }
+      return null;
+    })
+    .filter((name): name is string => Boolean(name));
+  if (names.length === 0) return undefined;
+  return `could not run — merchant data missing: ${names.join(", ")}`;
+}
+
 export function describeRuleCounts(counts: RuleCounts): string {
   const passed = asCount(counts.passed);
   const skipped = asCount(counts.skipped);
   const evaluated = asCount(counts.evaluated);
+  const withheld = asCount(counts.withheld);
 
   // Anything unaccounted for genuinely did not pass. Say so rather than let it
   // hide inside a denominator.
-  const unaccounted = Math.max(0, evaluated - passed - skipped);
+  const unaccounted = Math.max(0, evaluated - passed - skipped - withheld);
 
   // The passed count is always stated, including when it is zero. "3 not
   // applicable" alone leaves a reader to infer how many rules actually ruled on
   // this step, and inference is what the old fraction already got wrong.
   const parts: string[] = [`${passed} passed`];
   if (skipped > 0) parts.push(`${skipped} not applicable`);
+  // Withheld rules are called out in their own words. Folding them into "not
+  // applicable" would turn a permanent coverage hole into a routine one.
+  if (withheld > 0) parts.push(`${withheld} could not run`);
   if (unaccounted > 0) parts.push(`${unaccounted} unresolved`);
 
   return parts.join(", ");
