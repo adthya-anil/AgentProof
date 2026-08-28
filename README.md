@@ -28,7 +28,7 @@ an API key or network access unless you explicitly opt in.
 
 ```bash
 npm install
-npm test                    # 507 tests (2 need DATABASE_URL)
+npm test                    # 522 tests (2 need DATABASE_URL)
 npm run typecheck
 
 npm run demo:happy          # successful ₹1,399 transaction
@@ -327,6 +327,58 @@ INV-PRICE-BINDING to work.** The remaining limit, stated because it is otherwise
 invisible: the engine only sees changes between its own reads, so a price that
 moves and returns *between two checkpoints* is never observed. Native and
 `observed` are therefore not equivalent, and are reported apart.
+
+### The mapping can be written by a model
+
+Authoring the mapping is the slow part of onboarding a merchant: someone has to read an
+unfamiliar response and work out which field is the price. `npm run demo:infer` hands one
+response to a model and asks it, then refuses to believe the answer:
+
+```
+  Price path         pricing.unit.amount
+  Unit               decimalString
+  Stock path         availability.quantity
+  Vegan path         dietary.tags
+  Allergens path     dietary.contains
+  Capabilities       7 of 8
+  Price for review   ₹649.00  ← a human confirms this
+
+    mapping        total   checkout   fired                withheld
+    hand-written   ₹1164   blocked    INV-PRICE-BINDING    INV-INVENTORY
+    model-written  ₹1164   blocked    INV-PRICE-BINDING    INV-INVENTORY
+```
+
+Identical verdicts, from a mapping the model wrote off one response — including
+catching the re-price against a merchant with no version field.
+
+**The model proposes; deterministic code decides.** A proposal is accepted only by
+being *used*: a real `Product` is built from real rows with the proposed paths,
+through the same adapter and the same strict readers the hand-written path uses. So
+`readMoney` throwing, the name check and the stock-must-be-a-count rule all apply
+unchanged, and a second validator that could disagree with the first was never
+written.
+
+On top of that: paths must resolve, the id path must produce the ids actually
+requested, and a unit that contradicts its value — `minor` against `"649.00"` — is
+refused. Required fields must resolve on *every* sampled row, because `readMoney`
+throws on absence; fields carrying `whenMissing` need only appear on one, because
+tolerating absence is their entire purpose. Getting that distinction wrong rejected
+a correct mapping, reading a merchant's honest gap as the model's mistake.
+
+Versions are never taken from a path the model liked. Validation can prove a path
+resolves; it cannot prove the value ever *changes*, which is the only property a
+version needs — so `observed` is forced and reported as derived.
+
+**What this does not solve.** Nothing in `1299` says whether it means ₹12.99 or
+₹1,299.00, and a model reading one response cannot know. Validation catches
+contradictions but two self-consistent readings stay self-consistent, so the
+inferred price is always printed as a formatted amount for a human to agree with
+before the mapping is trusted with money. That is a deliberate stopping point.
+
+Found while building it: the OpenAI adapter self-healed exactly one provider quirk
+per call, so a first call that tripped both `temperature` and `max_tokens` failed as
+though the endpoint were misconfigured. It now adapts until the provider stops
+complaining, bounded by the number of quirks it knows.
 
 ### Reads are batched
 
@@ -1131,7 +1183,7 @@ src/app/api/preflight/          Suite runner as a server-sent event stream
 src/app/                        Next.js dashboard (server components elsewhere)
 src/scripts/                    Runnable demos and database tooling
 scripts/dev-db.sh               Local Postgres for development
-tests/                          507 tests
+tests/                          522 tests
 ```
 
 Money is an integer count of paise throughout. Float rupees are banned: an

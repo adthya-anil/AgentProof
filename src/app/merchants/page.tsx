@@ -1,5 +1,8 @@
 import { Tabs } from "@/app/components";
 import type { IntegrationVariant } from "@/lib/dashboard/data";
+import { SEED_CATALOG, SEED_INVENTORY } from "@/lib/hamperhub/catalog";
+import { parseMerchantSchema, readPath } from "@/lib/merchant/mapping";
+import { NORDWELL_CATALOG, NORDWELL_MAPPING } from "@/lib/merchants/nordwell";
 import { MerchantConsole } from "./MerchantConsole";
 
 /**
@@ -20,6 +23,84 @@ export default async function MerchantsPage({
   const params = await searchParams;
   const variant: IntegrationVariant =
     params.integration === "vulnerable" ? "vulnerable" : "fixed";
+
+  /**
+   * The comparison, read out of the two merchants rather than typed by hand.
+   *
+   * It was typed by hand first, and that was wrong for a reason worth keeping: six
+   * values sitting in JSX above a Run button, describing facts the code already knew.
+   * A reader could not tell the prose from the results — and if a mapping path or a seed
+   * price ever changed, the table would have gone on stating the old one with nothing to
+   * catch it. Derived, it cannot drift, and "is this hardcoded?" has a real answer.
+   */
+  const hamperhub = SEED_CATALOG[0]!;
+  const nordwell = NORDWELL_CATALOG[0]!;
+  /**
+   * Parsed rather than read as a literal.
+   *
+   * Two reasons. The literal's `as const` type has no `priceVersion` key at all —
+   * TypeScript rejected reading it, which is the type system making the page's own point
+   * — and parsing means a mapping this page cannot validate fails here rather than
+   * rendering a confident table describing a broken configuration.
+   */
+  const mapping = parseMerchantSchema(NORDWELL_MAPPING);
+
+  const priceVersionSource = mapping.product.priceVersion
+    ? mapping.product.priceVersion
+    : mapping.derive.priceVersion
+      ? "none — engine tracks it"
+      : "none";
+
+  const comparison: Array<{ label: string; hamperhub: string; nordwell: string }> = [
+    {
+      label: "Transport",
+      hamperhub: "in-process",
+      nordwell: `${mapping.transport.kind} over HTTP`,
+    },
+    { label: "Product id", hamperhub: hamperhub.id, nordwell: nordwell.id },
+    {
+      label: "Price",
+      hamperhub: `priceMinor: ${hamperhub.priceMinor}`,
+      nordwell: `${mapping.product.price.path}: ${JSON.stringify(
+        readPath(nordwell, mapping.product.price.path),
+      )}`,
+    },
+    {
+      label: "Stock",
+      hamperhub: `available: ${SEED_INVENTORY[hamperhub.id] ?? 0}`,
+      nordwell: mapping.inventory.available
+        ? `${mapping.inventory.available}: ${String(
+            readPath(nordwell, mapping.inventory.available),
+          )}`
+        : "not exposed",
+    },
+    {
+      label: "Vegan",
+      hamperhub: `vegan: ${String(hamperhub.vegan)}`,
+      nordwell: mapping.product.vegan
+        ? `${mapping.product.vegan.path}: ${JSON.stringify(
+            readPath(nordwell, mapping.product.vegan.path),
+          )}`
+        : "not exposed",
+    },
+    {
+      label: "Allergens",
+      hamperhub: `allergens: ${JSON.stringify(hamperhub.allergens)}`,
+      nordwell: mapping.product.allergens
+        ? `${mapping.product.allergens.path}, or absent`
+        : "not exposed",
+    },
+    {
+      label: "Price version",
+      hamperhub: `priceVersion: ${hamperhub.priceVersion} (monotonic)`,
+      nordwell: priceVersionSource,
+    },
+    {
+      label: "Reservations",
+      hamperhub: "yes",
+      nordwell: mapping.supportsReservations ? "yes" : "none",
+    },
+  ];
 
   return (
     <>
@@ -42,50 +123,13 @@ export default async function MerchantsPage({
             </tr>
           </thead>
           <tbody>
-            <tr>
-              <td>Transport</td>
-              <td>in-process</td>
-              <td className="mono">GraphQL over HTTP</td>
-            </tr>
-            <tr>
-              <td>Product id</td>
-              <td className="mono">p-coffee-arabica</td>
-              <td className="mono">NW-1001</td>
-            </tr>
-            <tr>
-              <td>Price</td>
-              <td className="mono">priceMinor: 59900</td>
-              <td className="mono">pricing.unit.amount: &quot;649.00&quot;</td>
-            </tr>
-            <tr>
-              <td>Stock</td>
-              <td className="mono">available: 8</td>
-              <td className="mono">availability.quantity: 12</td>
-            </tr>
-            <tr>
-              <td>Vegan</td>
-              <td className="mono">vegan: true</td>
-              <td className="mono">dietary.tags: [&quot;PLANT_BASED&quot;]</td>
-            </tr>
-            <tr>
-              <td>Allergens</td>
-              <td className="mono">allergens: []</td>
-              <td className="mono">dietary.contains, or absent</td>
-            </tr>
-            <tr>
-              <td>Price version</td>
-              <td>monotonic counter</td>
-              <td>
-                <strong>none</strong>
-              </td>
-            </tr>
-            <tr>
-              <td>Reservations</td>
-              <td>yes</td>
-              <td>
-                <strong>none</strong>
-              </td>
-            </tr>
+            {comparison.map((row) => (
+              <tr key={row.label}>
+                <td>{row.label}</td>
+                <td className="mono">{row.hamperhub}</td>
+                <td className="mono">{row.nordwell}</td>
+              </tr>
+            ))}
           </tbody>
         </table>
         <p className="meta">

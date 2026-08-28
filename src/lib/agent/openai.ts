@@ -27,6 +27,15 @@ export interface OpenAICompatibleConfig {
  * network does not abort a whole preflight run; parse and auth errors are not
  * retried because retrying will not fix them.
  */
+/**
+ * How many provider complaints `complete` can work around before giving up.
+ *
+ * One per adaptable quirk in `adaptToProviderComplaint`. Keeping it derived from that
+ * list rather than a loose constant means adding a third quirk cannot silently leave the
+ * retry budget one short.
+ */
+const ADAPTABLE_QUIRKS = 2;
+
 export class OpenAICompatibleLLM implements LLM {
   readonly name: string;
   readonly isReal = true;
@@ -74,14 +83,33 @@ export class OpenAICompatibleLLM implements LLM {
   private useMaxCompletionTokens = false;
 
   async complete(request: CompletionRequest): Promise<CompletionResult> {
-    let json: Record<string, unknown>;
-    try {
-      json = await this.requestWithRetry(this.buildBody(request));
-    } catch (error) {
-      const adapted = this.adaptToProviderComplaint(error);
-      if (!adapted) throw error;
-      json = await this.requestWithRetry(this.buildBody(request));
+    /**
+     * Adapt until the provider stops complaining, not once.
+     *
+     * This used to retry a single time, which quietly assumed a deployment has at most
+     * one quirk. Azure reasoning deployments have two — they reject `temperature` and
+     * require `max_completion_tokens` — so the very first call that sets `maxTokens`
+     * trips both: the temperature complaint is healed, the retry then fails on
+     * `max_tokens`, and the error surfaces as though the endpoint were misconfigured.
+     * Earlier calls happened to survive only because they set no token limit, so the
+     * second quirk was never reached and the flag was already set by the time anything
+     * did.
+     *
+     * Bounded by the number of quirks that can be adapted, so a genuinely broken request
+     * still fails instead of looping.
+     */
+    let json: Record<string, unknown> | undefined;
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= ADAPTABLE_QUIRKS; attempt += 1) {
+      try {
+        json = await this.requestWithRetry(this.buildBody(request));
+        break;
+      } catch (error) {
+        lastError = error;
+        if (!this.adaptToProviderComplaint(error)) throw error;
+      }
     }
+    if (!json) throw lastError;
     return this.parseCompletion(json);
   }
 
