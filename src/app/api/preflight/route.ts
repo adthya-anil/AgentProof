@@ -37,7 +37,13 @@ export async function GET(request: Request): Promise<Response> {
     url.searchParams.get("variant") === "fixed" ? "fixed" : "vulnerable";
   const generatedCount = clamp(url.searchParams.get("generated"), 9, 0, 12);
   const mode = parseMode(url.searchParams.get("mode"));
-  const roleMode = url.searchParams.get("roles") === "split" ? "split" : "compare";
+  /**
+   * Three named sizes, because five independent dropdowns asked a developer to
+   * assemble a sensible run out of parts. Each preset is a defensible whole.
+   */
+  const size = parseSize(url.searchParams.get("size"));
+  const preset = PRESETS[size];
+  const roleMode = preset.roleMode;
   // Comma-separated regression ids. Not surfaced in the UI, but it makes a
   // single live journey cheap to reproduce from a shell or a CI step.
   const liveGoals = (url.searchParams.get("liveGoals") ?? "")
@@ -143,6 +149,7 @@ export async function GET(request: Request): Promise<Response> {
           model: llm.name,
           modelIsReal: llm.isReal,
           pool: pool.map((m) => m.name),
+          size,
           roles: roleMode,
           adversaryModel: adversary?.name ?? null,
           buyerModels: buyers.map((m) => m.name),
@@ -161,8 +168,10 @@ export async function GET(request: Request): Promise<Response> {
           ...(adversary ? { adversary } : {}),
           intel,
           policy,
-          generatedCount,
-          mode,
+          generatedCount: preset.generated,
+          mode: preset.mode,
+          roleMode: preset.roleMode,
+          includePerturbations: preset.perturbations,
           ...(liveGoals.length > 0 ? { liveGoals } : {}),
         });
 
@@ -221,6 +230,25 @@ export async function GET(request: Request): Promise<Response> {
               providerOrders: journey.providerOrders,
               toolPath: journey.toolPath,
               durationMs: journey.durationMs,
+              /**
+               * A compact account of what happened, so each row is explorable in
+               * place. Types and reasons only — the full payloads live on the replay
+               * page, and shipping them for every journey would make the stream
+               * heavy for detail most rows never need opened.
+               */
+              steps: journey.auditTrail.map((e) => ({
+                seq: e.seq,
+                type: e.type,
+                tool: e.toolName,
+                reason: e.reason,
+                decision: e.decision,
+              })),
+              violations: journey.violations.map((v) => ({
+                invariant: v.invariantId,
+                severity: v.severity,
+                message: v.message,
+                remediation: v.remediation,
+              })),
             });
           },
         });
@@ -290,6 +318,44 @@ function clamp(
   const value = Number(raw);
   if (!Number.isFinite(value)) return fallback;
   return Math.min(max, Math.max(min, Math.trunc(value)));
+}
+
+/**
+ * What each preset actually runs.
+ *
+ * Quick is the default because the expensive half of a suite is the live-agent
+ * journeys, and a first run should be readable in one screen rather than a
+ * five-minute commitment. Compare is the only preset that attempts a goal twice, and
+ * it says so in its name.
+ */
+const PRESETS = {
+  quick: {
+    mode: "deterministic" as SuiteMode,
+    roleMode: "split" as const,
+    generated: 3,
+    perturbations: false,
+    label: "15 journeys — 12 fixed repros + 3 AI-invented",
+  },
+  standard: {
+    mode: "both" as SuiteMode,
+    roleMode: "split" as const,
+    generated: 3,
+    perturbations: true,
+    label: "30 journeys — adds live-agent replays and transport faults",
+  },
+  compare: {
+    mode: "both" as SuiteMode,
+    roleMode: "compare" as const,
+    generated: 3,
+    perturbations: true,
+    label: "45 journeys — every goal attempted by every model",
+  },
+} as const;
+
+type RunSize = keyof typeof PRESETS;
+
+function parseSize(raw: string | null): RunSize {
+  return raw === "standard" || raw === "compare" ? raw : "quick";
 }
 
 function parseMode(raw: string | null): SuiteMode {

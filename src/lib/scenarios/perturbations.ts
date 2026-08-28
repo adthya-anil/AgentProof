@@ -182,18 +182,27 @@ type PerturbationTemplate = Omit<Scenario, "driver" | "execute"> & {
  */
 export function perturbationScenarios(
   llms: readonly LLM[],
+  pairing: "round-robin" | "cross-product" = "round-robin",
 ): readonly Scenario[] {
   const scenarios: Scenario[] = [];
-  for (const template of PERTURBATIONS) {
-    for (const llm of llms) {
+  const pairs =
+    pairing === "cross-product"
+      ? PERTURBATIONS.flatMap((template) => llms.map((llm) => ({ template, llm })))
+      : PERTURBATIONS.map((template, index) => ({
+          template,
+          llm: llms[index % llms.length]!,
+        }));
+
+  {
+    for (const { template, llm } of pairs) {
       const { label, ...rest } = template;
       scenarios.push({
         ...rest,
         id:
-          llms.length > 1
+          pairing === "cross-product" && llms.length > 1
             ? `${template.id}-${shortModelName(llm.name)}`
             : template.id,
-        title: llms.length > 1 ? `${template.title} — ${llm.name}` : template.title,
+        title: `${template.title} — ${llm.name}`,
         driver: "agent",
         assignedModel: llm.name,
         execute: (c) => driveAgent(c, label, FULL_JOURNEY, llm),

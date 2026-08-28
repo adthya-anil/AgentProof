@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
 /**
  * Triggers a preflight run and streams it.
@@ -12,9 +12,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * rather than a spinner that eventually yields a table.
  */
 
-type Mode = "deterministic" | "agent" | "both";
+type RunSize = "quick" | "standard" | "compare";
 type Payments = "simulated" | "razorpay";
-type Roles = "compare" | "split";
 type Driver = "deterministic" | "agent";
 
 interface ModelBreakdown {
@@ -31,6 +30,20 @@ interface ScenarioRow {
   title: string;
   category: string;
   driver: Driver;
+  /** Compact account of what happened, for the expanded row. */
+  steps?: Array<{
+    seq: number;
+    type: string;
+    tool?: string | null;
+    reason?: string | null;
+    decision?: string | null;
+  }>;
+  violations?: Array<{
+    invariant: string;
+    severity: string;
+    message: string;
+    remediation: string;
+  }>;
   assignedModel?: string | null;
   model?: string | null;
   targetsInvariant?: string | null;
@@ -68,7 +81,7 @@ export default function PreflightConsole({
   initialVariant: "vulnerable" | "fixed";
 }) {
   const [variant, setVariant] = useState(initialVariant);
-  const [mode, setMode] = useState<Mode>("both");
+  const [size, setSize] = useState<RunSize>("quick");
   /**
    * Simulated by default.
    *
@@ -77,13 +90,9 @@ export default function PreflightConsole({
    * not the default but that the report says which one actually ran.
    */
   const [payments, setPayments] = useState<Payments>("simulated");
-  /**
-   * Compare by default, because it is the mode that produced a finding: the same
-   * request reached a 7.75% discount on one model and 14.23% plus a floor-price
-   * breach on the other. Split is the cheaper, more pointed run.
-   */
-  const [roles, setRoles] = useState<Roles>("compare");
-  const [generated, setGenerated] = useState(3);
+
+  /** Which journey row is expanded, if any. */
+  const [openRow, setOpenRow] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [phase, setPhase] = useState<string | null>(null);
   const [meta, setMeta] = useState<{
@@ -118,10 +127,8 @@ export default function PreflightConsole({
 
     const params = new URLSearchParams({
       variant,
-      mode,
+      size,
       payments,
-      roles,
-      generated: String(generated),
     });
     const source = new EventSource(`/api/preflight?${params.toString()}`);
     sourceRef.current = source;
@@ -176,6 +183,8 @@ export default function PreflightConsole({
                   providerOrders: e.providerOrders as number,
                   toolPath: e.toolPath as string[],
                   durationMs: e.durationMs as number,
+                  steps: e.steps as ScenarioRow["steps"],
+                  violations: e.violations as ScenarioRow["violations"],
                 }
               : r,
           ),
@@ -200,7 +209,7 @@ export default function PreflightConsole({
       setRunning(false);
       source.close();
     };
-  }, [variant, mode, payments, roles, generated]);
+  }, [variant, size, payments]);
 
   const stop = useCallback(() => {
     sourceRef.current?.close();
@@ -242,41 +251,15 @@ export default function PreflightConsole({
           </div>
 
           <label className="check">
-            Journeys
+            Run
             <select
-              value={mode}
-              onChange={(e) => setMode(e.target.value as Mode)}
+              value={size}
+              onChange={(e) => setSize(e.target.value as RunSize)}
               disabled={running}
             >
-              <option value="both">Fixed repros + live agent</option>
-              <option value="agent">Live agent only</option>
-              <option value="deterministic">Fixed repros only (seconds)</option>
-            </select>
-          </label>
-
-          <label className="check">
-            AI-generated goals
-            <select
-              value={generated}
-              onChange={(e) => setGenerated(Number(e.target.value))}
-              disabled={running}
-            >
-              <option value={0}>0</option>
-              <option value={3}>3</option>
-              <option value={6}>6</option>
-              <option value={9}>9</option>
-            </select>
-          </label>
-
-          <label className="check">
-            Models
-            <select
-              value={roles}
-              onChange={(e) => setRoles(e.target.value as Roles)}
-              disabled={running}
-            >
-              <option value="compare">Both shop — compare them</option>
-              <option value="split">One invents, one shops</option>
+              <option value="quick">Quick — 15 journeys, seconds</option>
+              <option value="standard">Standard — 30 journeys, a few minutes</option>
+              <option value="compare">Compare models — 45 journeys</option>
             </select>
           </label>
 
@@ -369,7 +352,17 @@ export default function PreflightConsole({
             </thead>
             <tbody>
               {rows.map((row) => (
-                <tr key={row.id} style={{ opacity: row.state === "waiting" ? 0.45 : 1 }}>
+                <Fragment key={row.id}>
+                <tr
+                  style={{
+                    opacity: row.state === "waiting" ? 0.45 : 1,
+                    cursor: row.state === "done" ? "pointer" : "default",
+                  }}
+                  onClick={() =>
+                    row.state === "done" &&
+                    setOpenRow(openRow === row.id ? null : row.id)
+                  }
+                >
                   <td>
                     {row.state === "waiting" && <span className="note">·</span>}
                     {row.state === "running" && <span className="pulse">●</span>}
@@ -437,6 +430,65 @@ export default function PreflightConsole({
                     {row.moneyAtRisk ? `₹${row.moneyAtRisk}` : "—"}
                   </td>
                 </tr>
+
+                {/*
+                  What happened, in place.
+                  A row used to say a journey was an unsafe violation and leave you to
+                  navigate elsewhere to find out why. The account of a finding belongs
+                  next to the finding.
+                */}
+                {openRow === row.id && (
+                  <tr>
+                    <td colSpan={6} style={{ background: "var(--panel-2)" }}>
+                      {row.violations && row.violations.length > 0 && (
+                        <div style={{ marginBottom: "0.85rem" }}>
+                          {row.violations.map((v) => (
+                            <div key={v.invariant + v.message} className="finding">
+                              <div>
+                                <span className={`badge ${v.severity}`}>
+                                  {v.severity}
+                                </span>{" "}
+                                <code>{v.invariant}</code>
+                              </div>
+                              <div>{v.message}</div>
+                              <div className="note">Fix: {v.remediation}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <ol className="steps">
+                        {(row.steps ?? []).map((step) => (
+                          <li key={step.seq} data-decision={step.decision ?? ""}>
+                            <span className="mono note">
+                              {String(step.seq).padStart(2, "0")}
+                            </span>{" "}
+                            <span className="mono">{step.type}</span>
+                            {step.tool ? (
+                              <>
+                                {" · "}
+                                <code>{step.tool}</code>
+                              </>
+                            ) : null}
+                            {step.reason ? (
+                              <div className="note">{step.reason}</div>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ol>
+
+                      <p className="note" style={{ marginBottom: 0 }}>
+                        {row.durationMs}ms ·{" "}
+                        <Link
+                          href={`/journey/${encodeURIComponent(row.id)}?integration=${variant}`}
+                        >
+                          full replay with payloads →
+                        </Link>
+                      </p>
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               ))}
             </tbody>
           </table>

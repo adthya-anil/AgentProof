@@ -177,10 +177,31 @@ describe("more than one model", () => {
     }
   }
 
-  it("attempts every goal with every model, under distinct ids", () => {
+  /**
+   * Round-robin is the default, because attempting every goal with every model
+   * doubles a run to answer a question you rarely need asked twice. Both models still
+   * work; no goal is executed twice.
+   */
+  it("gives each goal to one model by default", () => {
+    const scenarios = agentDrivenScenarios({
+      llms: [new NamedScripted("openai:gpt-x"), new NamedScripted("anthropic:claude-y")],
+      only: ["reg-09-discount-stacking", "reg-12-over-budget"],
+    });
+
+    expect(scenarios).toHaveLength(2);
+    // Two goals, two models, one each — not four journeys.
+    expect(scenarios.map((s) => s.assignedModel)).toEqual([
+      "openai:gpt-x",
+      "anthropic:claude-y",
+    ]);
+    expect(new Set(scenarios.map((s) => s.id)).size).toBe(2);
+  });
+
+  it("attempts every goal with every model when a comparison is asked for", () => {
     const scenarios = agentDrivenScenarios({
       llms: [new NamedScripted("openai:gpt-x"), new NamedScripted("anthropic:claude-y")],
       only: ["reg-09-discount-stacking"],
+      pairing: "cross-product",
     });
 
     expect(scenarios).toHaveLength(2);
@@ -194,10 +215,21 @@ describe("more than one model", () => {
     expect(scenarios[0]!.targetsInvariant).toBe(scenarios[1]!.targetsInvariant);
   });
 
+  it("keeps the model out of the id when a goal runs once", () => {
+    // A model suffix only earns its place when the same goal appears twice.
+    const [scenario] = agentDrivenScenarios({
+      llms: [new NamedScripted("openai:gpt-x")],
+      only: ["reg-09-discount-stacking"],
+    });
+    expect(scenario!.id).toBe("live-discount-stacking");
+  });
+
   it("breaks the suite down per model instead of averaging them", async () => {
     const scenarios = agentDrivenScenarios({
       llms: [new NamedScripted("model-a"), new NamedScripted("model-b")],
       only: ["reg-01-normal", "reg-09-discount-stacking"],
+      // Cross-product, so each model has more than one journey to break down.
+      pairing: "cross-product",
     });
     const suite = await runSuite(scenarios, {
       mutations: MutationSet.vulnerable(),

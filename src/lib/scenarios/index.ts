@@ -64,6 +64,15 @@ export interface SuiteCompositionOptions {
   /** Invariants that failed previously, so generation can probe nearby. */
   maxToolCalls?: number;
   mode?: SuiteMode;
+  /** Set to "compare" to attempt every goal with every model. */
+  roleMode?: RoleMode;
+  /**
+   * Include the four transport-fault journeys. Default true.
+   *
+   * A knob because they are cheap but not free to *read*: the quick preset trades
+   * §7C coverage for a suite short enough to scan in one screen.
+   */
+  includePerturbations?: boolean;
   /** Restrict the live-agent half to specific regression ids. */
   liveGoals?: readonly string[];
 }
@@ -116,6 +125,7 @@ export async function assembleSuite(
   // run. The live-agent half roughly doubles the suite and takes minutes against
   // a real model, so it is opted into rather than inherited.
   const mode = options.mode ?? "deterministic";
+  const roleMode = options.roleMode ?? "split";
   const pool =
     options.llms && options.llms.length > 0 ? options.llms : [options.llm];
   const realPool = pool.filter((llm) => llm.isReal);
@@ -134,11 +144,16 @@ export async function assembleSuite(
    * wearing its name.
    */
   const perturbations =
-    mode === "deterministic"
-      ? PERTURBATION_SCENARIOS
-      : realPool.length > 0
-        ? perturbationScenarios(realPool)
-        : [];
+    options.includePerturbations === false
+      ? []
+      : mode === "deterministic"
+        ? PERTURBATION_SCENARIOS
+        : realPool.length > 0
+          ? perturbationScenarios(
+              realPool,
+              roleMode === "compare" ? "cross-product" : "round-robin",
+            )
+          : [];
 
   const deterministic = mode === "agent" ? [] : REGRESSION_SCENARIOS;
   const live =
@@ -148,6 +163,7 @@ export async function assembleSuite(
           llms: pool,
           maxToolCalls: options.maxToolCalls ?? 24,
           only: options.liveGoals,
+          pairing: roleMode === "compare" ? "cross-product" : "round-robin",
         });
 
   return {

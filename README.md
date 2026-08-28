@@ -335,10 +335,21 @@ plausible-looking 200 when it is subtly wrong.
 A second configured model can do more than duplicate the first. The **Models** control
 on `/preflight` chooses:
 
-| Mode | What each model does |
-|---|---|
-| **Both shop — compare them** | Every model attempts every goal as a buyer |
-| **One invents, one shops** | The last model becomes the *adversary* and writes the goals; the rest execute them |
+One **Run** control picks the whole shape:
+
+| Run | Journeys | What it contains |
+|---|---|---|
+| **Quick** | **15** | 12 fixed repros + 3 AI-invented. Seconds. |
+| **Standard** | **30** | Adds live-agent replays and the four transport faults. Minutes. |
+| **Compare models** | **45** | Every goal attempted by every model. |
+
+Quick is the default. The fixed repros cost about 50ms in total and catch all eight
+seeded defects, so the expensive half of any run is the live-agent journeys — and a
+first run should be readable in one screen rather than a five-minute commitment.
+
+**No goal is attempted twice unless you ask for it.** Quick and Standard deal goals
+round-robin across the configured models, so both models work and nothing is
+duplicated. Only **Compare** runs the same goal on both, and it says so in its name.
 
 Neither is strictly better, so both stay:
 
