@@ -1,7 +1,7 @@
 import { BuyerAgent } from "../agent/buyer.js";
 import type { LLM } from "../agent/llm.js";
 import { describeAgentRun } from "./describeRun.js";
-import { REGRESSION_GOALS } from "./regression.js";
+import { AGENT_UNREACHABLE_GOALS, REGRESSION_GOALS } from "./regression.js";
 import type { Scenario, ScenarioContext, ScenarioOutcome } from "./types.js";
 
 /**
@@ -50,10 +50,11 @@ export function agentDrivenScenarios(
 ): readonly Scenario[] {
   const pool = resolvePool(options);
   const allow = new Set(options.only ?? []);
-  const goals =
+  const goals = (
     allow.size > 0
       ? REGRESSION_GOALS.filter((g) => allow.has(g.id))
-      : REGRESSION_GOALS;
+      : REGRESSION_GOALS
+  ).filter((g) => !(g.id in AGENT_UNREACHABLE_GOALS));
 
   const scenarios: Scenario[] = [];
 
@@ -77,6 +78,10 @@ export function agentDrivenScenarios(
         assignedModel: llm.name,
         targetsInvariant: goal.targetsInvariant,
         intent: goal.intent,
+        // The mechanism travels with the label. Without these the twin cannot
+        // reach its target invariant and a pass would mean nothing.
+        ...(goal.interference ? { interference: goal.interference } : {}),
+        ...(goal.faults ? { faults: goal.faults } : {}),
         async execute(c: ScenarioContext): Promise<ScenarioOutcome> {
           const agent = new BuyerAgent({
             llm,

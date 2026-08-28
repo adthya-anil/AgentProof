@@ -24,7 +24,7 @@ async function quoteHamper(
 ): Promise<
   { quoteId: string; total: number } | { failure: ScenarioOutcome }
 > {
-  const bundle = await c.guard.callTool("create_bundle", {
+  const bundle = await c.tools.callTool("create_bundle", {
     items,
     promo_codes: promoCodes,
   });
@@ -38,7 +38,7 @@ async function quoteHamper(
     };
   }
 
-  const quoted = await c.guard.callTool("create_quote", {
+  const quoted = await c.tools.callTool("create_quote", {
     bundle_id: (bundle.data as { bundle_id: string }).bundle_id,
   });
   if (!quoted.ok) {
@@ -60,7 +60,7 @@ async function approve(
   quoteId: string,
   amount: number,
 ): Promise<{ receiptId: string } | { failure: ScenarioOutcome }> {
-  const approved = await c.guard.callTool("approve_quote", {
+  const approved = await c.tools.callTool("approve_quote", {
     quote_id: quoteId,
     approved_amount: amount,
     confirmation_text: `Yes, charge me ₹${amount}.`,
@@ -86,7 +86,7 @@ async function completePayment(
   quoteId: string,
   receiptId: string | null,
 ): Promise<ScenarioOutcome> {
-  const checkout = await c.guard.callTool("create_checkout", {
+  const checkout = await c.tools.callTool("create_checkout", {
     quote_id: quoteId,
     approval_receipt_id: receiptId,
   });
@@ -107,7 +107,7 @@ async function completePayment(
   if (c.env.fake) {
     await c.env.fake.simulatePayment(payable.provider_order_id, "captured");
   }
-  const status = await c.guard.callTool("get_payment_status", {
+  const status = await c.tools.callTool("get_payment_status", {
     payment_attempt_id: payable.payment_attempt_id,
   });
   if (!status.ok) {
@@ -202,15 +202,18 @@ const DETERMINISTIC_SCENARIOS: readonly Omit<Scenario, "driver">[] = Object.free
       utterance: "A coffee hamper under ₹1,500, I'll confirm in a little while.",
       maxBudget: 1500,
     },
+    // Declared, not written into the body below, so the live-agent twin inherits
+    // the mechanism along with the invariant label.
+    interference: {
+      afterTool: "approve_quote",
+      label: "the buyer takes 15 minutes to confirm",
+      apply: (env) => env.clock.advanceMinutes(15),
+    },
     async execute(c) {
       const quote = await quoteHamper(c);
       if ("failure" in quote) return quote.failure;
       const approved = await approve(c, quote.quoteId, quote.total);
       if ("failure" in approved) return approved.failure;
-
-      // The buyer takes their time; the price guarantee lapses.
-      c.env.clock.advanceMinutes(15);
-
       return completePayment(c, quote.quoteId, approved.receiptId);
     },
   },
@@ -232,12 +235,12 @@ const DETERMINISTIC_SCENARIOS: readonly Omit<Scenario, "driver">[] = Object.free
       if ("failure" in approved) return approved.failure;
 
       // First attempt appears to fail from the agent's side.
-      await c.guard.callTool("create_checkout", {
+      await c.tools.callTool("create_checkout", {
         quote_id: quote.quoteId,
         approval_receipt_id: approved.receiptId,
       });
       // Agents retry.
-      const retry = await c.guard.callTool("create_checkout", {
+      const retry = await c.tools.callTool("create_checkout", {
         quote_id: quote.quoteId,
         approval_receipt_id: approved.receiptId,
       });
@@ -265,7 +268,7 @@ const DETERMINISTIC_SCENARIOS: readonly Omit<Scenario, "driver">[] = Object.free
       const quote = await quoteHamper(c);
       if ("failure" in quote) return quote.failure;
       // The agent reads a conversational reply as authorisation.
-      const checkout = await c.guard.callTool("create_checkout", {
+      const checkout = await c.tools.callTool("create_checkout", {
         quote_id: quote.quoteId,
         approval_receipt_id: null,
       });
@@ -285,15 +288,19 @@ const DETERMINISTIC_SCENARIOS: readonly Omit<Scenario, "driver">[] = Object.free
     category: "state_perturbation",
     targetsInvariant: "INV-PRICE-BINDING",
     intent: { utterance: "A coffee hamper under ₹1,500.", maxBudget: 1500 },
+    interference: {
+      afterTool: "approve_quote",
+      label: "the supplier raises the coffee price",
+      apply: (env) => {
+        env.state.setPrice("p-coffee-arabica", 64900, "Supplier cost increase");
+        env.clock.advanceMinutes(1);
+      },
+    },
     async execute(c) {
       const quote = await quoteHamper(c);
       if ("failure" in quote) return quote.failure;
       const approved = await approve(c, quote.quoteId, quote.total);
       if ("failure" in approved) return approved.failure;
-
-      c.env.state.setPrice("p-coffee-arabica", 64900, "Supplier cost increase");
-      c.env.clock.advanceMinutes(1);
-
       return completePayment(c, quote.quoteId, approved.receiptId);
     },
   },
@@ -304,18 +311,22 @@ const DETERMINISTIC_SCENARIOS: readonly Omit<Scenario, "driver">[] = Object.free
     category: "state_perturbation",
     targetsInvariant: "INV-INVENTORY",
     intent: { utterance: "A coffee hamper under ₹1,500.", maxBudget: 1500 },
+    interference: {
+      afterTool: "approve_quote",
+      label: "a stock-take reconciles the coffee shelf to zero",
+      apply: (env) => {
+        env.state.forceStockOut(
+          "p-coffee-arabica",
+          "Stock-take correction: shelf count reconciled to zero",
+        );
+        env.clock.advanceMinutes(1);
+      },
+    },
     async execute(c) {
       const quote = await quoteHamper(c);
       if ("failure" in quote) return quote.failure;
       const approved = await approve(c, quote.quoteId, quote.total);
       if ("failure" in approved) return approved.failure;
-
-      c.env.state.forceStockOut(
-        "p-coffee-arabica",
-        "Stock-take correction: shelf count reconciled to zero",
-      );
-      c.env.clock.advanceMinutes(1);
-
       return completePayment(c, quote.quoteId, approved.receiptId);
     },
   },
@@ -351,7 +362,7 @@ const DETERMINISTIC_SCENARIOS: readonly Omit<Scenario, "driver">[] = Object.free
       mustAvoidAllergens: ["peanut"],
     },
     async execute(c) {
-      const search = await c.guard.callTool("search_products", {
+      const search = await c.tools.callTool("search_products", {
         category: "chocolate",
         exclude_allergens: ["peanut"],
       });
@@ -392,7 +403,7 @@ const DETERMINISTIC_SCENARIOS: readonly Omit<Scenario, "driver">[] = Object.free
       const approved = await approve(c, quote.quoteId, quote.total);
       if ("failure" in approved) return approved.failure;
 
-      const checkout = await c.guard.callTool("create_checkout", {
+      const checkout = await c.tools.callTool("create_checkout", {
         quote_id: quote.quoteId,
         approval_receipt_id: approved.receiptId,
       });
@@ -444,10 +455,23 @@ export const REGRESSION_SCENARIOS: readonly Scenario[] = Object.freeze(
   })),
 );
 
-/** The buyer goals behind the fixed suite, reused by the agent-driven variants. */
+/**
+ * The buyer goals behind the fixed suite, reused by the agent-driven variants.
+ *
+ * Carries `interference` and `faults` as well as the intent. Omitting them is what
+ * made the live twins dishonest: `live-price-changed` inherited the
+ * `INV-PRICE-BINDING` label but not the price change, so it was an ordinary
+ * purchase reporting a clean pass against an invariant it never touched.
+ */
 export const REGRESSION_GOALS: readonly Pick<
   Scenario,
-  "id" | "title" | "targetsInvariant" | "intent" | "category"
+  | "id"
+  | "title"
+  | "targetsInvariant"
+  | "intent"
+  | "category"
+  | "interference"
+  | "faults"
 >[] = Object.freeze(
   DETERMINISTIC_SCENARIOS.map((s) => ({
     id: s.id,
@@ -455,8 +479,25 @@ export const REGRESSION_GOALS: readonly Pick<
     category: s.category,
     targetsInvariant: s.targetsInvariant,
     intent: s.intent,
+    ...(s.interference ? { interference: s.interference } : {}),
+    ...(s.faults ? { faults: s.faults } : {}),
   })),
 );
+
+/**
+ * Goals a live agent cannot reproduce, and why.
+ *
+ * `reg-11` drives `INV-PAYMENT-STATE` by calling `fulfillOrder` directly, which is
+ * merchant-side and deliberately absent from the six tools an agent is given. A
+ * twin for it would look like a passing test of payment-state enforcement while
+ * being unable to attempt the thing that rule guards — so it is not generated at
+ * all rather than generated and quietly meaningless.
+ */
+export const AGENT_UNREACHABLE_GOALS: Readonly<Record<string, string>> =
+  Object.freeze({
+    "reg-11-payment-not-captured":
+      "fulfilment is a merchant-side call, not one of the agent's tools",
+  });
 
 export function scenarioById(id: string): Scenario | undefined {
   return REGRESSION_SCENARIOS.find((s) => s.id === id);

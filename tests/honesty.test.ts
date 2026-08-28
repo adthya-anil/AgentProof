@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { describeEngine } from "../src/lib/dashboard/data.js";
 import { type CompletionResult, type LLM, LlmError } from "../src/lib/agent/llm.js";
+import { createEnvironment } from "../src/lib/harness.js";
 import { ScriptedLLM } from "../src/lib/agent/scripted.js";
 import { MutationSet } from "../src/lib/hamperhub/mutations.js";
 import { loadPolicyFromFile } from "../src/lib/policy/load.js";
@@ -10,7 +12,10 @@ import {
   PERTURBATION_SCENARIOS,
   perturbationScenarios,
 } from "../src/lib/scenarios/perturbations.js";
-import { REGRESSION_SCENARIOS } from "../src/lib/scenarios/regression.js";
+import {
+  AGENT_UNREACHABLE_GOALS,
+  REGRESSION_SCENARIOS,
+} from "../src/lib/scenarios/regression.js";
 
 /**
  * Guards the claims the product makes about its own numbers.
@@ -98,14 +103,58 @@ describe("who drove the journey", () => {
 
   it("keeps the same buyer goal and target invariant as the fixed original", () => {
     const live = agentDrivenScenarios({ llm: new ScriptedLLM() });
-    expect(live).toHaveLength(REGRESSION_SCENARIOS.length);
+    const reachable = REGRESSION_SCENARIOS.filter(
+      (s) => !(s.id in AGENT_UNREACHABLE_GOALS),
+    );
+    expect(live).toHaveLength(reachable.length);
+
     for (const [index, scenario] of live.entries()) {
-      const original = REGRESSION_SCENARIOS[index]!;
+      const original = reachable[index]!;
       expect(scenario.intent).toEqual(original.intent);
       expect(scenario.targetsInvariant).toBe(original.targetsInvariant);
       // Distinct id, so the two never overwrite each other in a report.
       expect(scenario.id).not.toBe(original.id);
     }
+  });
+
+  /**
+   * A twin must inherit the *mechanism*, not just the label.
+   *
+   * `live-price-changed` previously carried `INV-PRICE-BINDING` while the price
+   * change lived inside the scripted body it replaced — so it was an ordinary
+   * purchase that reported a clean pass against an invariant it never exercised.
+   * Six of sixteen live journeys in a real run were meaningless this way.
+   */
+  it("carries the interference that makes the target invariant reachable", () => {
+    const live = agentDrivenScenarios({ llm: new ScriptedLLM() });
+
+    for (const original of REGRESSION_SCENARIOS) {
+      if (!original.interference && !original.faults) continue;
+      if (original.id in AGENT_UNREACHABLE_GOALS) continue;
+
+      const twin = live.find((s) => s.intent === original.intent);
+      expect(twin, `no twin for ${original.id}`).toBeDefined();
+      if (original.interference) {
+        expect(twin!.interference, `${original.id} lost its interference`).toBe(
+          original.interference,
+        );
+      }
+      if (original.faults) {
+        expect(twin!.faults, `${original.id} lost its faults`).toBe(
+          original.faults,
+        );
+      }
+    }
+  });
+
+  it("does not invent a twin for a goal an agent cannot reproduce", () => {
+    const live = agentDrivenScenarios({ llm: new ScriptedLLM() });
+    // reg-11 drives INV-PAYMENT-STATE through a merchant-side fulfilment call
+    // that is deliberately not one of the agent's six tools.
+    expect(Object.keys(AGENT_UNREACHABLE_GOALS)).toContain(
+      "reg-11-payment-not-captured",
+    );
+    expect(live.some((s) => s.id.includes("payment-not-captured"))).toBe(false);
   });
 });
 
@@ -217,6 +266,156 @@ describe("an agent that ran out of road", () => {
   });
 });
 
+describe("documented knobs actually do something", () => {
+  /**
+   * `AGENTPROOF_SEED` was documented in the README and `.env.example` as
+   * controlling reproducible runs, and was read by nothing at all — every run used
+   * the hard-coded default whatever the file said. A knob that does nothing is
+   * worse than no knob in a project whose whole claim is that its reports mean
+   * what they say.
+   */
+  const withSeed = (seed?: string) => {
+    if (seed === undefined) delete process.env.AGENTPROOF_SEED;
+    else process.env.AGENTPROOF_SEED = seed;
+    return createEnvironment().ids.next("quote");
+  };
+
+  afterEach(() => {
+    delete process.env.AGENTPROOF_SEED;
+  });
+
+  it("makes AGENTPROOF_SEED reproducible", () => {
+    expect(withSeed("1337")).toBe(withSeed("1337"));
+  });
+
+  it("makes AGENTPROOF_SEED actually change the run", () => {
+    expect(withSeed("1337")).not.toBe(withSeed("9999"));
+  });
+
+  it("falls back to a fixed default when the seed is blank", () => {
+    // A bare `AGENTPROOF_SEED=` line must not become the literal seed "".
+    expect(withSeed("")).toBe(withSeed(undefined));
+  });
+
+  it("lets an explicit option beat the environment", () => {
+    process.env.AGENTPROOF_SEED = "from-env";
+    const explicit = createEnvironment({ seed: "from-code" }).ids.next("quote");
+    const fromEnv = createEnvironment().ids.next("quote");
+    expect(explicit).not.toBe(fromEnv);
+  });
+});
+
+describe("the engine panel reports the whole pool", () => {
+  /**
+   * `describeEngine` returned only the primary adapter, so a correctly configured
+   * second model was invisible until a run was already underway — making the only
+   * way to verify your configuration to spend tokens on it. The singular "Model"
+   * label then read as confirmation that one model was all there should be.
+   */
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("names every configured model", () => {
+    vi.stubEnv("LLM_ADAPTER", "openai");
+    vi.stubEnv("LLM_API_KEY", "k");
+    vi.stubEnv("LLM_MODEL", "gpt-5.6-sol");
+    vi.stubEnv("ANTHROPIC_MODEL", "claude-opus-5");
+
+    expect(describeEngine().pool).toEqual([
+      "openai:gpt-5.6-sol",
+      "anthropic:claude-opus-5",
+    ]);
+  });
+
+  it("reports an empty pool rather than inventing a model", () => {
+    vi.stubEnv("LLM_ADAPTER", "scripted");
+    vi.stubEnv("LLM_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_MODEL", "");
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+
+    expect(describeEngine().pool).toEqual([]);
+  });
+
+  it("never throws on a broken configuration, because it renders a page", () => {
+    vi.stubEnv("LLM_ADAPTER", "nonsense-adapter");
+    expect(() => describeEngine()).not.toThrow();
+  });
+});
+
+describe("payment claims match payment reality", () => {
+  /**
+   * The Engine panel reported the *configured* adapter, so a page on which no
+   * journey touched Razorpay announced "razorpay test mode (rzp_test_…)". The
+   * preflight route built that adapter purely to print its name and never passed
+   * it to the runner. A false claim about money is the worst thing this tool could
+   * put on a screen.
+   */
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("reports only that credentials exist, not that a run uses them", () => {
+    vi.stubEnv("RAZORPAY_KEY_ID", "rzp_test_abc123");
+    vi.stubEnv("RAZORPAY_KEY_SECRET", "secret");
+
+    const engine = describeEngine();
+    expect(engine.razorpayConfigured).toBe(true);
+    expect(engine.razorpayKeyId).toBe("rzp_test_abc123");
+  });
+
+  it("says not configured when either half of the pair is missing", () => {
+    vi.stubEnv("RAZORPAY_KEY_ID", "rzp_test_abc123");
+    vi.stubEnv("RAZORPAY_KEY_SECRET", "");
+    expect(describeEngine().razorpayConfigured).toBe(false);
+  });
+
+  /**
+   * `providerOrders` was counted off the simulated provider, so it was zero by
+   * construction whenever a real one was wired in — the duplicate-order column
+   * stopped working in exactly the configuration where a duplicate order costs
+   * real money. It is now counted from the audit trail, which both providers write.
+   */
+  it("counts provider orders from the audit trail, not the simulator", async () => {
+    const journey = await runScenario(REGRESSION_SCENARIOS[0]!, {
+      mutations: MutationSet.fixed(),
+    });
+    const fromTrail = journey.auditTrail.filter(
+      (e) =>
+        e.type === "razorpay.order_created" || e.type === "payment.order_created",
+    ).length;
+    expect(journey.providerOrders).toBe(fromTrail);
+    expect(journey.providerOrders).toBeGreaterThan(0);
+  });
+
+  /**
+   * You cannot ask Razorpay to time out on demand, so a fault-injection scenario
+   * run against a real provider has not tested its invariant. Refusing beats
+   * reporting a pass it never earned.
+   */
+  it("refuses a fault-injection scenario when no simulator is available", async () => {
+    const faulty = REGRESSION_SCENARIOS.find((s) => s.faults !== undefined)!;
+    const journey = await runScenario(faulty, {
+      mutations: MutationSet.vulnerable(),
+      // A stand-in for any real provider: its presence removes the simulator.
+      paymentProvider: {
+        name: "stub-real",
+        isReal: true,
+        createOrder: async () => {
+          throw new Error("must never be called");
+        },
+        fetchPayment: async () => {
+          throw new Error("must never be called");
+        },
+      } as never,
+    });
+
+    expect(journey.disposition).toBe("inconclusive");
+    expect(journey.note).toMatch(/requires the simulated payment provider/);
+    expect(journey.error).toBeNull();
+  });
+});
+
 describe("suite composition", () => {
   it("defaults to the deterministic suite so recall stays reproducible", async () => {
     const policy = loadPolicyFromFile();
@@ -239,7 +438,10 @@ describe("suite composition", () => {
       generatedCount: 0,
       mode: "both",
     });
-    expect(suite.liveCount).toBe(REGRESSION_SCENARIOS.length);
+    // Every goal except those an agent provably cannot reproduce.
+    expect(suite.liveCount).toBe(
+      REGRESSION_SCENARIOS.length - Object.keys(AGENT_UNREACHABLE_GOALS).length,
+    );
     expect(suite.regressionCount).toBe(REGRESSION_SCENARIOS.length);
   });
 

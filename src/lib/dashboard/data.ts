@@ -1,4 +1,4 @@
-import { llmFromEnv } from "../agent/factory.js";
+import { llmFromEnv, llmPoolFromEnv } from "../agent/factory.js";
 import { describeAdapter, selectPaymentAdapter } from "../payments/factory.js";
 import { IdFactory } from "../core/ids.js";
 import { ManualClock } from "../core/clock.js";
@@ -98,6 +98,11 @@ export function getJourney(
 export function describeEngine(): {
   model: string;
   modelIsReal: boolean;
+  /** Every model that will drive a journey, not just the primary one. */
+  pool: string[];
+  /** Credentials are present. Says nothing about whether a run uses them. */
+  razorpayConfigured: boolean;
+  razorpayKeyId: string | null;
   paymentAdapter: string;
   policyVersion: string;
 } {
@@ -110,6 +115,33 @@ export function describeEngine(): {
   } catch {
     // An unconfigured or misconfigured model is a state to display, not throw on.
   }
+
+  /**
+   * The whole pool, reported before any run starts.
+   *
+   * This panel used to show only the primary adapter, which meant a correctly
+   * configured second model was invisible until a run was already underway — so
+   * the one way to check your configuration was to spend tokens on it. Worse, the
+   * panel read "MODEL: openai:gpt-5.6-sol" in the singular, which is affirmative
+   * evidence for the wrong conclusion.
+   */
+  let pool: string[] = [];
+  try {
+    pool = llmPoolFromEnv().map((llm) => llm.name);
+  } catch {
+    // Same reasoning: a broken pool is a state to render, not to throw on.
+  }
+
+  /**
+   * Whether Razorpay credentials exist — not whether a run will use them.
+   *
+   * The distinction is the whole point. This used to report the selected adapter,
+   * which read as "every journey hits Razorpay" on a page where no journey did.
+   * Credentials being present is a fact about the environment; using them is a
+   * decision made per run and reported by that run.
+   */
+  const keyId = process.env.RAZORPAY_KEY_ID?.trim();
+  const razorpayConfigured = Boolean(keyId && process.env.RAZORPAY_KEY_SECRET);
   const adapter = selectPaymentAdapter({
     ids: new IdFactory("describe"),
     clock: new ManualClock(),
@@ -118,6 +150,9 @@ export function describeEngine(): {
   return {
     model,
     modelIsReal,
+    pool,
+    razorpayConfigured,
+    razorpayKeyId: keyId ?? null,
     paymentAdapter: describeAdapter(adapter),
     policyVersion: `${policy.policyId}`,
   };

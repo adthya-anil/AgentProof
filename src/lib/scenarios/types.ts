@@ -1,6 +1,7 @@
 import type { BuyerIntent } from "../core/types.js";
 import type { Guard, ToolCaller, ToolResult } from "../guard/guard.js";
 import type { Environment } from "../harness.js";
+import type { ToolName } from "../hamperhub/tools.js";
 import type { FaultPlan } from "../payments/fake.js";
 import type { PerturbationPlan } from "../runner/perturbation.js";
 
@@ -59,6 +60,15 @@ export interface ScenarioOutcome {
  */
 export type ScenarioDriver = "deterministic" | "agent";
 
+/** A change to the world, applied once, immediately after a given tool succeeds. */
+export interface Interference {
+  /** Fires after this tool returns successfully. */
+  afterTool: ToolName;
+  /** Shown in the journey note, so a reader knows what changed and when. */
+  label: string;
+  apply(env: Environment): void;
+}
+
 export interface ScenarioIntent {
   utterance: string;
   maxBudget?: number;
@@ -91,6 +101,19 @@ export interface Scenario {
   intent: ScenarioIntent;
   /** Provider faults to install before the journey runs. */
   faults?: FaultPlan;
+  /**
+   * The world changing underneath the agent, mid-journey.
+   *
+   * Declarative rather than written into `execute`, because a scripted body cannot
+   * be shared with a live agent that chooses its own steps. When the price change
+   * behind `INV-PRICE-BINDING` lived inside `reg-07`'s function, the live twin
+   * inherited the invariant label and none of the mechanism — so it was an ordinary
+   * purchase that passed while claiming to probe price binding.
+   *
+   * Keyed to a tool rather than to a position in a script, so the same declaration
+   * works for a fixed sequence and for a model improvising around it.
+   */
+  interference?: Interference;
   /** Transport perturbations: latency, duplicate delivery, replay (§7C). */
   perturbation?: PerturbationPlan;
   execute(c: ScenarioContext): Promise<ScenarioOutcome>;
