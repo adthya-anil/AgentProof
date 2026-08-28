@@ -799,8 +799,20 @@ function toRow(event: SerialisedAuditEvent): Row | null {
         at: Date.now(),
         icon: "~",
         tone: "warn",
-        title: "Merchant state changed mid-journey",
-        detail: event.reason ?? undefined,
+        /**
+         * States the movement, not just that one happened.
+         *
+         * "Merchant state changed mid-journey" tells a reader something moved but
+         * not what, so it cannot be checked against the violation it caused. A
+         * price going 599 → 649 next to `INV-PRICE-BINDING` firing is a complete
+         * account; the same row without numbers is an assertion to be taken on
+         * trust.
+         */
+        title:
+          out.kind === "price"
+            ? `Merchant raised a price mid-journey — ₹${out.from ?? "?"} → ₹${out.to ?? "?"}`
+            : `Merchant stock changed mid-journey — ${out.from ?? "?"} → ${out.to ?? "?"} available`,
+        detail: [out.product_id, event.reason].filter(Boolean).join(" · ") || undefined,
       };
 
     case "reservation.released":

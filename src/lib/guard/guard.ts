@@ -95,6 +95,9 @@ export class Guard {
   private intent!: BuyerIntent;
 
   /** Binds the Guard to a buyer intent and opens the audit trail for it. */
+  /** Unsubscribes the state-change observer when a journey ends. */
+  private unobserveState: (() => void) | undefined;
+
   beginIntent(intent: BuyerIntent): void {
     this.intent = intent;
     this.financialActionTaken = false;
@@ -114,6 +117,41 @@ export class Guard {
       },
       policyVersion: this.opts.policyVersion,
     });
+
+    /**
+     * Record price and stock movements for the rest of this journey.
+     *
+     * The trail used to show `INV-PRICE-BINDING` firing with no entry saying a
+     * price had moved: a quote agreed, an approval, then a checkout blocked for
+     * "catalog prices changed", and nothing anywhere recording what changed, when
+     * or why. The cause of the most interesting violations was the one thing
+     * missing from the record of them.
+     *
+     * Subscribed here rather than at construction so every entry carries the
+     * journey's own run and intent ids, which is what makes the change attributable
+     * to the transaction it interfered with.
+     */
+    this.unobserveState?.();
+    this.unobserveState = this.opts.state.observeChanges((change) => {
+      this.audit("catalog.state_changed", {
+        reason: change.reason,
+        output: {
+          kind: change.kind,
+          product_id: change.productId,
+          // Prices are minor units; stock is a count. Reporting both raw keeps
+          // this honest rather than guessing at a formatter per kind.
+          from: change.kind === "price" ? toMajor(change.from) : change.from,
+          to: change.kind === "price" ? toMajor(change.to) : change.to,
+          new_version: change.newVersion,
+        },
+      });
+    });
+  }
+
+  /** Stops recording state changes for the finished journey. */
+  endIntent(): void {
+    this.unobserveState?.();
+    this.unobserveState = undefined;
   }
 
   /**

@@ -34,12 +34,41 @@ export class MerchantState {
   private inventory = new Map<string, InventoryRecord>();
   private reservations = new Map<string, Reservation>();
   private changes: StateChange[] = [];
+  private observers = new Set<(change: StateChange) => void>();
 
   constructor(
     private readonly clock: Clock,
     private readonly ids: IdFactory,
   ) {
     this.reset();
+  }
+
+  /**
+   * Watch price and stock mutations as they happen.
+   *
+   * Exists so the Guard can put them in the audit log. Without it the trail
+   * recorded that `INV-PRICE-BINDING` had fired but not that a price had changed:
+   * a reader saw a quote agreed, an approval, then a checkout blocked for
+   * "catalog prices changed", with no entry anywhere saying what changed, when, or
+   * why. The cause of the most interesting violations was the one thing missing
+   * from the record of them.
+   *
+   * Returns an unsubscribe function. Observer errors are swallowed, because a
+   * listener must never be able to break a state mutation.
+   */
+  observeChanges(observer: (change: StateChange) => void): () => void {
+    this.observers.add(observer);
+    return () => this.observers.delete(observer);
+  }
+
+  private notify(change: StateChange): void {
+    for (const observer of this.observers) {
+      try {
+        observer(change);
+      } catch {
+        // A broken listener must not corrupt merchant state.
+      }
+    }
   }
 
   reset(): void {
@@ -112,6 +141,7 @@ export class MerchantState {
     product.priceMinor = priceMinor;
     product.priceVersion = change.newVersion;
     this.changes.push(change);
+    this.notify(change);
     return change;
   }
 
@@ -129,6 +159,7 @@ export class MerchantState {
     record.available = available;
     record.version = change.newVersion;
     this.changes.push(change);
+    this.notify(change);
     return change;
   }
 

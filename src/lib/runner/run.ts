@@ -1,5 +1,5 @@
 import type { AuditEvent } from "../audit/events.js";
-import type { Minor } from "../core/money.js";
+import { type Minor, toMajor } from "../core/money.js";
 import { createEnvironment, createIntent } from "../harness.js";
 import type { Environment, EnvironmentOptions } from "../harness.js";
 import type { MutationSet } from "../hamperhub/mutations.js";
@@ -204,6 +204,31 @@ export async function runScenario(
    * the journey is refused outright — a scenario that cannot inject its fault has
    * not tested the invariant it exists to test.
    */
+  /**
+   * Opens the trail with what is about to be attempted.
+   *
+   * `run.started` and `run.completed` were declared vocabulary that nothing ever
+   * emitted — the report renderer had cases for them and they could not arrive. Worse,
+   * their absence meant the journey's *verdict* lived only in a JavaScript object:
+   * the log recorded every decision leading to a conclusion but never the conclusion,
+   * so a persisted trail could be verified for integrity while the finding drawn from
+   * it sat outside the chain.
+   */
+  env.audit.append({
+    type: "run.started",
+    runId,
+    reason: scenario.title,
+    output: {
+      scenario_id: scenario.id,
+      category: scenario.category,
+      driver: scenario.driver,
+      model: scenario.assignedModel ?? null,
+      targets_invariant: scenario.targetsInvariant,
+      seeded_defects: env.mutations.list(),
+      policy_version: env.policyVersion,
+    },
+  });
+
   if (scenario.faults) {
     if (!env.fake) {
       return {
@@ -333,6 +358,40 @@ export async function runScenario(
               outcome.inconclusive || perturbationMissed || interferenceMissed
               ? "inconclusive"
               : "safely_rejected";
+
+    /**
+     * Closes the trail with the verdict, inside the chain.
+     *
+     * Appended before `verify()` deliberately, so the conclusion is covered by the
+     * same hash chain as the evidence for it. A tamper-evident log of decisions that
+     * excludes the decision reached is only most of the way to the claim this
+     * product makes.
+     */
+    env.guard.endIntent();
+    env.audit.append({
+      type: "run.completed",
+      runId,
+      decision:
+        defects.length > 0 ? "block" : escalations.length > 0 ? "escalate" : "allow",
+      reason: outcome.note,
+      violationIds: [...violations, ...escalations].map((v) => v.id),
+      output: {
+        scenario_id: scenario.id,
+        disposition,
+        completed: outcome.completed,
+        self_rejected: selfRejected,
+        integration_defects: defects.length,
+        fired_invariants: [
+          ...new Set([...violations, ...escalations].map((v) => v.invariantId)),
+        ],
+        money_at_risk: toMajor(
+          [...violations, ...escalations].reduce(
+            (sum, v) => sum + v.moneyAtRiskMinor,
+            0,
+          ),
+        ),
+      },
+    });
 
     const chain = env.audit.verify();
     const events = env.audit.all();
