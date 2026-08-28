@@ -62,8 +62,26 @@ export async function GET(request: Request): Promise<Response> {
         // configured, each regression goal is attempted by both — a merchant does
         // not get to pick which agent shops their store.
         const requested = url.searchParams.get("models");
-        const pool =
-          requested === "primary" ? [llm] : llmPoolFromEnv();
+        const pool = requested === "primary" ? [llm] : llmPoolFromEnv();
+
+        // Refuse rather than substitute. A mode that promises live agents and
+        // silently delivers replayed scripts is worse than an error, because the
+        // report that comes out of it looks exactly like a real one.
+        if (mode !== "deterministic" && pool.filter((m) => m.isReal).length === 0) {
+          send({
+            kind: "error",
+            message:
+              "No real model is configured, so there is nothing to drive a " +
+              "live-agent journey. Set LLM_ADAPTER=openai with LLM_API_KEY, " +
+              "LLM_MODEL and LLM_BASE_URL (and optionally ANTHROPIC_MODEL for a " +
+              "second family), then restart the server — .env is read once at " +
+              'startup. Or choose "Fixed repros only" to run without a model.',
+          });
+          controller.enqueue(encoder.encode("event: end\ndata: {}\n\n"));
+          controller.close();
+          return;
+        }
+
         const policy = loadPolicyFromFile();
         const adapter = selectPaymentAdapter({
           ids: new IdFactory("preflight"),

@@ -54,7 +54,9 @@ export class AnthropicLLM implements LLM {
     // a 17-product catalogue is not fast. A 30s ceiling would time out healthy
     // calls and log them as provider faults.
     this.timeoutMs = config.timeoutMs ?? 120_000;
-    this.maxRetries = config.maxRetries ?? 2;
+    // Three, not two: a rate-limited retry can now wait out a full minute, so a
+    // journey that hits the window twice still has an attempt left.
+    this.maxRetries = config.maxRetries ?? 3;
     this.apiVersion = config.apiVersion ?? "2023-06-01";
   }
 
@@ -251,10 +253,36 @@ export class AnthropicLLM implements LLM {
       } catch (error) {
         lastError = error;
         if (error instanceof LlmError && !error.retryable) throw error;
-        if (attempt < this.maxRetries) await sleep(500 * 2 ** attempt);
+        if (attempt >= this.maxRetries) break;
+        await sleep(this.backoffMs(error, attempt));
       }
     }
     throw lastError;
+  }
+
+  /**
+   * How long to wait before retrying.
+   *
+   * Exponential backoff from 500ms is right for a blip and useless for a rate
+   * limit. Azure meters this deployment per *minute* — "Rate limit of 40000 per
+   * 60s exceeded" — so retrying after 0.5s and again after 1s just burns both
+   * attempts inside the same window and loses the journey. Measured: two
+   * perturbation journeys dropped that way in a single suite.
+   *
+   * A 429 therefore waits out the window, preferring the server's own
+   * `Retry-After` when it sends one. Capped, because a suite that stalls for five
+   * minutes on one journey is its own kind of failure.
+   */
+  private backoffMs(error: unknown, attempt: number): number {
+    const retryAfter = error instanceof LlmError ? error.retryAfterMs : undefined;
+    if (retryAfter !== undefined) {
+      return Math.min(retryAfter + 500, RATE_LIMIT_MAX_WAIT_MS);
+    }
+    if (error instanceof LlmError && error.rateLimited) {
+      // No hint given, so assume the usual per-minute window.
+      return Math.min(20_000 * (attempt + 1), RATE_LIMIT_MAX_WAIT_MS);
+    }
+    return 500 * 2 ** attempt;
   }
 
   private async request(body: unknown): Promise<Record<string, unknown>> {
@@ -275,12 +303,19 @@ export class AnthropicLLM implements LLM {
       });
       const text = await response.text();
       if (!response.ok) {
+        const retryAfterMs = parseRetryAfter(
+          response.headers.get("retry-after"),
+        );
         throw new LlmError(
           `Anthropic request failed with ${response.status}: ${describeError(text)}`,
           response.status === 401 || response.status === 403
             ? "config"
             : "provider",
           response.status === 429 || response.status >= 500,
+          {
+            rateLimited: response.status === 429,
+            ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+          },
         );
       }
       return JSON.parse(text) as Record<string, unknown>;
@@ -321,6 +356,25 @@ function describeError(text: string): string {
     // Not JSON. The raw body is the best available description.
   }
   return text.slice(0, 300);
+}
+
+/** Never wait longer than this for a rate limit; a stalled suite is a failure too. */
+const RATE_LIMIT_MAX_WAIT_MS = 70_000;
+
+/**
+ * Reads `Retry-After`, which may be either a seconds count or an HTTP date.
+ * Returns undefined for anything unparseable rather than guessing.
+ */
+function parseRetryAfter(header: string | null): number | undefined {
+  if (!header) return undefined;
+
+  const seconds = Number(header.trim());
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+
+  const date = Date.parse(header);
+  if (!Number.isNaN(date)) return Math.max(0, date - Date.now());
+
+  return undefined;
 }
 
 function sleep(ms: number): Promise<void> {

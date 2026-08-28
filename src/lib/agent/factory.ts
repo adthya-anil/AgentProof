@@ -93,8 +93,13 @@ export function isRealLlmConfigured(): boolean {
  * rather than to "an AI".
  *
  * Order is stable so a run is reproducible in composition even though the models
- * themselves are not. Returns the scripted model when nothing real is configured,
- * because an empty pool would mean no journeys at all.
+ * themselves are not.
+ *
+ * Returns an **empty array** when nothing real is configured. It used to return a
+ * scripted model so a run always had something to execute, but that made an
+ * unconfigured environment indistinguishable from a working one — the run
+ * proceeded, the report looked normal, and the "live agent" journeys in it were
+ * replayed scripts. Callers must handle empty and say so.
  */
 export function llmPoolFromEnv(): LLM[] {
   const pool: LLM[] = [];
@@ -124,7 +129,26 @@ export function llmPoolFromEnv(): LLM[] {
     }
   }
 
-  return pool.length > 0 ? pool : [new ScriptedLLM()];
+  return pool;
+}
+
+/**
+ * The pool, or a clear explanation of why there isn't one.
+ *
+ * Exists so every caller reports the same reason instead of inventing its own
+ * phrasing for "no model configured".
+ */
+export function requireLlmPool(): LLM[] {
+  const pool = llmPoolFromEnv();
+  if (pool.length === 0) {
+    throw new Error(
+      "No real model is configured, so there is nothing to drive a live-agent " +
+        "journey. Set LLM_ADAPTER=openai with LLM_API_KEY, LLM_MODEL and " +
+        "LLM_BASE_URL, and optionally ANTHROPIC_MODEL for a second family. " +
+        "Nothing is substituted: a scripted journey would not be a live one.",
+    );
+  }
+  return pool;
 }
 
 /** Human-readable summary of the pool, for a report header. */

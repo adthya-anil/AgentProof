@@ -23,8 +23,11 @@ async function main(): Promise<void> {
 
   const db = new Db(config);
   try {
-    if (!(await db.isReachable())) {
-      console.error(`✗ Cannot reach ${config.describe}`);
+    const probe = await db.probe();
+    if (!probe.ok) {
+      console.error(`✗ ${config.describe}`);
+      if (probe.reason) console.error(`  ${probe.reason}`);
+      if (probe.hint) console.error(`  ${probe.hint}`);
       process.exit(1);
     }
     console.log(`AgentProof store — ${config.describe}\n`);
