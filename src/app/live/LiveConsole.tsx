@@ -1,6 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type ScopedRecheck,
+  shouldWatchPayment,
+  visibleRecheck,
+} from "@/lib/live/scopedRecheck";
 import type { RecheckResult } from "@/lib/live/session";
 import type {
   LiveEvent,
@@ -108,8 +113,23 @@ export default function LiveConsole({
   const [error, setError] = useState<string | null>(null);
   const [rechecking, setRechecking] = useState(false);
   const [watching, setWatching] = useState(false);
-  const [recheckResult, setRecheckResult] = useState<RecheckResult | null>(null);
+  /**
+   * Paired with its session id, so a previous run's success cannot render against
+   * a new order. See `scopedRecheck.ts`.
+   */
+  const [storedRecheck, setStoredRecheck] = useState<ScopedRecheck | null>(null);
   const [recheckError, setRecheckError] = useState<string | null>(null);
+
+  const recheckResult = visibleRecheck(storedRecheck, hosted?.sessionId);
+
+  /**
+   * The money is in, so this payment is finished with.
+   *
+   * Keyed on `verified` rather than `fulfilled`: a captured payment whose
+   * fulfilment the Guard then refused is still a payment that must not be made
+   * again. Conflating the two would leave a Pay button beside collected money.
+   */
+  const settled = recheckResult?.verified === true;
   const sourceRef = useRef<EventSource | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -126,6 +146,9 @@ export default function LiveConsole({
     setHosted(null);
     setError(null);
     setSession(null);
+    setStoredRecheck(null);
+    setRecheckError(null);
+    setWatching(false);
     setRunning(true);
 
     const p = PRESETS[preset]!;
@@ -210,7 +233,7 @@ export default function LiveConsole({
       // than appending an identical "still not captured" row every few seconds.
       if (silent && !body.verified && !body.fulfilled) return;
 
-      setRecheckResult(body);
+      setStoredRecheck({ sessionId: hosted.sessionId, result: body });
       // Reuse the same renderer as the live stream, so a verification looks like
       // the journey step it is rather than a separate status widget.
       const appended = (body.events ?? [])
@@ -239,7 +262,7 @@ export default function LiveConsole({
    */
   useEffect(() => {
     if (!hosted?.sessionId) return;
-    if (recheckResult?.fulfilled || recheckResult?.verified) return;
+    if (!shouldWatchPayment(storedRecheck, hosted.sessionId)) return;
 
     let attempts = 0;
     setWatching(true);
@@ -258,7 +281,7 @@ export default function LiveConsole({
       setWatching(false);
       clearInterval(timer);
     };
-  }, [hosted, recheckResult, recheck]);
+  }, [hosted, storedRecheck, recheck]);
 
   const stop = useCallback(() => {
     sourceRef.current?.close();
@@ -399,55 +422,71 @@ export default function LiveConsole({
 
       {hosted && (
         <div className="panel highlight">
-          <h2>Real Razorpay test payment</h2>
+          <h2>{settled ? "Real Razorpay test payment — settled" : "Real Razorpay test payment"}</h2>
           <p className="note" style={{ marginTop: 0 }}>
             The Guard authorised this, so a genuine test-mode order now exists.
             Order <code>{hosted.orderId}</code> for ₹{hosted.amount}.
           </p>
-          <div className="controls">
-            <a
-              className="primary link"
-              href={hosted.url}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Pay ₹{hosted.amount} in Razorpay test mode →
-            </a>
 
-            {/*
-              The other half of the story, and it used to be missing entirely.
-              Paying the link happens minutes after the journey ends, so without a
-              way to ask again the console sat on verified=false forever and a
-              successful payment looked like a broken app.
-            */}
-            {/*
-              Kept alongside the automatic watch, not replaced by it. Polling can
-              be stopped by a bounded window, a closed tab or a lost session, and a
-              viewer who has just paid should never be stuck with no way to ask.
-            */}
-            <button
-              type="button"
-              onClick={() => void recheck()}
-              disabled={rechecking}
-            >
-              {rechecking ? "Checking Razorpay…" : "Check now"}
-            </button>
-          </div>
-
-          {watching && !recheckResult?.verified && (
-            <p className="note" style={{ marginTop: "0.85rem", marginBottom: 0 }}>
-              <span className="pulse">●</span> Watching Razorpay for this payment —
-              pay in the other tab and this page will update on its own.
+          {/*
+            Everything that invites a payment disappears once the money is in.
+            Leaving a "Pay" call to action beside a captured payment is not merely
+            untidy: it invites a second attempt, in a tool whose entire argument is
+            that money must not move twice for one intent. The link itself stays
+            reachable as plain text so the trail is still followable.
+          */}
+          {settled ? (
+            <p className="note" style={{ marginBottom: 0 }}>
+              Nothing further to pay. The link{" "}
+              <code>{hosted.orderId}</code> is settled, and asking again would only
+              invite a second attempt at an intent that already has one.
             </p>
-          )}
+          ) : (
+            <>
+              <div className="controls">
+                <a
+                  className="primary link"
+                  href={hosted.url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Pay ₹{hosted.amount} in Razorpay test mode →
+                </a>
 
-          <p className="note" style={{ marginBottom: 0 }}>
-            Use <strong>Netbanking</strong> and pick Success on the mock page.
-            Cards are rejected as international on a fresh test account. Then come
-            back and press verify: the payment goes through the same Guard
-            checkpoints, and fulfilment is attempted only once Razorpay confirms
-            the money is captured.
-          </p>
+                {/*
+                  Kept alongside the automatic watch, not replaced by it. Polling
+                  can be ended by its own window, a closed tab or a lost session,
+                  and someone who has just paid must never be stuck unable to ask.
+                */}
+                <button
+                  type="button"
+                  onClick={() => void recheck()}
+                  disabled={rechecking}
+                >
+                  {rechecking ? "Checking Razorpay…" : "Check now"}
+                </button>
+              </div>
+
+              {watching && (
+                <p
+                  className="note"
+                  style={{ marginTop: "0.85rem", marginBottom: 0 }}
+                >
+                  <span className="pulse">●</span> Watching Razorpay for this
+                  payment — pay in the other tab and this page will update on its
+                  own.
+                </p>
+              )}
+
+              <p className="note" style={{ marginBottom: 0 }}>
+                Use <strong>Netbanking</strong> and pick Success on the mock page.
+                Cards are rejected as international on a fresh test account. You do
+                not need to come back and click anything: the payment is verified
+                through the same Guard checkpoints, and fulfilment attempted, only
+                once Razorpay confirms the money is captured.
+              </p>
+            </>
+          )}
 
           {recheckResult && (
             <div
