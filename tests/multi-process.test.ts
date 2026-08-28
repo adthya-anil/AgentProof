@@ -52,10 +52,32 @@ async function inParallelProcesses(
     })
       .then((r) => r.stdout.trim())
       .catch((e: { stdout?: string; stderr?: string }) =>
-        (e.stdout ?? `ERROR ${e.stderr ?? "unknown"}`).trim(),
+        // Keep the child's stderr. It is the only place the real cause survives.
+        (e.stdout || `ERROR ${e.stderr ?? "unknown"}`).trim(),
       ),
   );
   return Promise.all(children);
+}
+
+/**
+ * Fails with the child's own error before any count is asserted.
+ *
+ * Without this, a database that is merely switched off produces "expected [] to have a
+ * length of 1" — a message that blames the payable-order guarantee for something that is
+ * only a closed port. A missing `payable_order_claims` table reads identically, so the
+ * two most likely setup mistakes are indistinguishable from a genuine correctness
+ * failure, and both point at the wrong code. Verified by turning the server off and by
+ * skipping the migration, which is how the wording was chosen.
+ */
+function assertChildrenRan(outputs: readonly string[]): void {
+  const failed = outputs.filter((o) => o.startsWith("ERROR"));
+  if (failed.length === 0) return;
+  throw new Error(
+    `${failed.length} of ${outputs.length} child processes could not run, so this ` +
+      `says nothing about concurrency. Usually the database is not running, or ` +
+      `\`npm run db:migrate\` has not been run so payable_order_claims does not ` +
+      `exist.\n\nFirst child reported:\n${failed[0]}`,
+  );
 }
 
 /**
@@ -92,6 +114,7 @@ describeDb("two processes, one database", () => {
       4,
     );
 
+    assertChildrenRan(outputs);
     const winners = outputs.filter((o) => o.startsWith("WON"));
     const losers = outputs.filter((o) => o === "LOST");
 
@@ -119,8 +142,9 @@ describeDb("two processes, one database", () => {
      * index. That made this test fail for a reason that had nothing to do with what
      * it measures.
      */
-    await inParallelProcesses(
-      `
+    assertChildrenRan(
+      await inParallelProcesses(
+        `
 import pg from ${PG_SPECIFIER};
 const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
 await client.connect();
@@ -128,7 +152,8 @@ await client.query("create table if not exists mp_control (claim_key text, owner
 console.log("ready");
 await client.end();
 `,
-      1,
+        1,
+      ),
     );
 
     const unconstrained = `
@@ -149,6 +174,7 @@ if (seen.rows.length === 0) {
 await client.end();
 `;
     const outputs = await inParallelProcesses(unconstrained, 4);
+    assertChildrenRan(outputs);
     const winners = outputs.filter((o) => o.startsWith("WON"));
 
     // More than one winner: the duplicate the constraint prevents, reproduced.
