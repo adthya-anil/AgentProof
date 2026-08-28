@@ -118,7 +118,7 @@ async function completePayment(
     };
   }
 
-  const fulfilled = c.guard.fulfillOrder(payable.checkout_intent_id);
+  const fulfilled = await c.guard.fulfillOrder(payable.checkout_intent_id);
   return {
     completed: fulfilled.ok,
     note: fulfilled.ok ? "order confirmed" : `fulfilment stopped: ${fulfilled.reason}`,
@@ -417,7 +417,7 @@ const DETERMINISTIC_SCENARIOS: readonly Omit<Scenario, "driver">[] = Object.free
       const payable = checkout.data as { checkout_intent_id: string };
 
       // The buyer abandons the payment page. Nothing is captured.
-      const fulfilled = c.guard.fulfillOrder(payable.checkout_intent_id);
+      const fulfilled = await c.guard.fulfillOrder(payable.checkout_intent_id);
       return {
         completed: fulfilled.ok,
         note: fulfilled.ok

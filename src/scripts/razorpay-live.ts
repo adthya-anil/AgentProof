@@ -203,7 +203,7 @@ async function main(): Promise<void> {
   // closing summary can separate the two instead of reporting a scary
   // "1 violation" on a successful run.
   const violationsBeforeProbe = env.guard.recordedViolations().length;
-  const premature = env.guard.fulfillOrder(checkout.id);
+  const premature = await env.guard.fulfillOrder(checkout.id);
   if (premature.ok) {
     console.error(
       "✗ Order was fulfilled before payment capture — INV-PAYMENT-STATE failed.",
@@ -315,7 +315,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const fulfilled = env.guard.fulfillOrder(checkout.id);
+  const fulfilled = await env.guard.fulfillOrder(checkout.id);
   if (!fulfilled.ok) {
     console.error(`✗ Fulfilment blocked after capture: ${fulfilled.reason}`);
     process.exit(1);

@@ -189,7 +189,7 @@ async function runOneBuyer(
       await guard.callTool("get_payment_status", {
         payment_attempt_id: attempt.id,
       });
-      orderConfirmed = guard.fulfillOrder(checkout.id).ok;
+      orderConfirmed = (await guard.fulfillOrder(checkout.id)).ok;
     }
   }
 

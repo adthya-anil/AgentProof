@@ -16,7 +16,8 @@ import type { MerchantState } from "../hamperhub/state.js";
 import { TOOL_SCHEMAS, type ToolName } from "../hamperhub/tools.js";
 import { PaymentProviderError } from "../payments/provider.js";
 import { type PolicyEngine, type PolicyEvaluation } from "../policy/engine.js";
-import { CapabilitySet } from "../policy/capabilities.js";
+import type { CatalogSource } from "../merchant/source.js";
+import { LocalCatalogSource } from "../merchant/source.js";
 import type { Checkpoint } from "../policy/invariants/types.js";
 import type { Policy } from "../policy/schema.js";
 import type { Violation } from "../policy/violations.js";
@@ -66,14 +67,14 @@ export interface GuardOptions {
    */
   paymentProvider?: { name: string; isReal: boolean };
   /**
-   * What the merchant under test can actually supply.
+   * Where catalogue state comes from, and therefore what can be checked.
    *
-   * Defaults to the full set because the only merchant today is HamperHub, which is
-   * built to the spec's entity model and genuinely does expose every field. An adapter
-   * fronting a real catalogue declares less, and the engine then withholds the rules
-   * whose inputs are absent instead of running them against undefined.
+   * Defaults to the in-process merchant, which is every existing run. An adapter
+   * fronting a real REST or GraphQL catalogue supplies fewer capabilities, and the
+   * engine then withholds the rules whose inputs are absent rather than running them
+   * against undefined.
    */
-  capabilities?: CapabilitySet;
+  catalog?: CatalogSource;
 }
 
 /**
@@ -186,6 +187,18 @@ export class Guard {
     return new Guard(this.opts);
   }
 
+  /**
+   * Points the Guard at a different catalogue.
+   *
+   * Separate from the constructor option so an environment can be built once and then
+   * aimed at a mapped merchant — which is what the adapter tests and a future
+   * multi-merchant run both need. Changing it mid-journey would mean two checkpoints
+   * were evaluated against different merchants, so this is intended for setup only.
+   */
+  setCatalogSource(catalog: CatalogSource): void {
+    this.opts.catalog = catalog;
+  }
+
   recordedViolations(): readonly Violation[] {
     return this.violations;
   }
@@ -250,7 +263,7 @@ export class Guard {
         case "create_quote":
           return await this.handleCreateQuote(parsed.data as QuoteArgs);
         case "approve_quote":
-          return this.handleApproveQuote(parsed.data as ApproveArgs);
+          return await this.handleApproveQuote(parsed.data as ApproveArgs);
         case "create_checkout":
           return await this.handleCreateCheckout(parsed.data as CheckoutArgs);
         case "get_payment_status":
@@ -356,7 +369,7 @@ export class Guard {
       },
     });
 
-    const evaluation = this.evaluate("quote.created", { quote });
+    const evaluation = await this.evaluate("quote.created", { quote });
     if (evaluation.decision === "block" || evaluation.decision === "escalate") {
       // Never hold stock for a quote that cannot legally be sold.
       this.opts.service.releaseQuoteReservation(quote.id);
@@ -382,13 +395,13 @@ export class Guard {
    * Evaluates expiry *before* minting a receipt, so an approval can never be
    * bound to a quote the merchant has already stopped honouring.
    */
-  private handleApproveQuote(args: ApproveArgs): ToolResult {
+  private async handleApproveQuote(args: ApproveArgs): Promise<ToolResult> {
     const quote = this.opts.service.getQuote(args.quote_id);
     if (!quote) {
       throw new CommerceError("unknown_quote", `No such quote: ${args.quote_id}`);
     }
 
-    const preEvaluation = this.evaluate("quote.approved", { quote });
+    const preEvaluation = await this.evaluate("quote.approved", { quote });
     if (preEvaluation.decision === "block") {
       return this.blockedResult(preEvaluation, false);
     }
@@ -466,7 +479,7 @@ export class Guard {
         status: "blocked",
       };
 
-      const concurring = this.evaluate("checkout.requested", {
+      const concurring = await this.evaluate("checkout.requested", {
         quote,
         approval: approvalForPrecheck,
         checkoutIntent: provisional,
@@ -522,7 +535,7 @@ export class Guard {
       ? this.opts.service.getApproval(checkout.approvalReceiptId)
       : null;
 
-    const evaluation = this.evaluate("checkout.requested", {
+    const evaluation = await this.evaluate("checkout.requested", {
       quote,
       approval,
       checkoutIntent: checkout,
@@ -625,7 +638,7 @@ export class Guard {
       ? this.opts.service.getApproval(checkout.approvalReceiptId)
       : null;
 
-    const evaluation = this.evaluate("payment.verified", {
+    const evaluation = await this.evaluate("payment.verified", {
       quote,
       approval,
       checkoutIntent: checkout ?? null,
@@ -666,7 +679,7 @@ export class Guard {
    * Fulfilment is not an agent-callable tool — an agent must never be able to
    * mark goods as shipped. The runner calls this after payment verification.
    */
-  fulfillOrder(checkoutIntentId: string): ToolResult {
+  async fulfillOrder(checkoutIntentId: string): Promise<ToolResult> {
     const checkout = this.opts.service.getCheckoutIntent(checkoutIntentId);
     if (!checkout) {
       return {
@@ -691,7 +704,7 @@ export class Guard {
     // "the merchant would have refused too" from "only the Guard caught this".
     const merchantWould = this.opts.service.wouldFulfil(checkoutIntentId);
 
-    const evaluation = this.evaluate("order.fulfilled", {
+    const evaluation = await this.evaluate("order.fulfilled", {
       quote,
       approval,
       checkoutIntent: checkout,
@@ -739,7 +752,7 @@ export class Guard {
 
   // -- internals -----------------------------------------------------------
 
-  private evaluate(
+  private async evaluate(
     checkpoint: Checkpoint,
     parts: {
       quote?: Quote | null;
@@ -748,21 +761,39 @@ export class Guard {
       paymentAttempt?: PaymentAttempt | null;
       priorCheckoutIntents?: readonly CheckoutIntent[];
     },
-  ): PolicyEvaluation {
+  ): Promise<PolicyEvaluation> {
+    const source = this.opts.catalog ?? new LocalCatalogSource(this.opts.state);
+
+    /**
+     * Resolve every product this checkpoint could look at, once, before any rule runs.
+     *
+     * The alternative — letting each invariant fetch what it needs — would make
+     * `evaluate` async on every rule and, worse, let two rules at the same checkpoint
+     * observe different catalogue states. A report could then contain a price-binding
+     * pass and an inventory violation computed against different prices, with nothing
+     * in the output to show why they disagreed.
+     *
+     * The line items are the only source of product ids a rule can reach, so this is
+     * the complete set rather than a guess at one.
+     */
+    const productIds = (parts.quote?.lineItems ?? []).map((line) => line.productId);
+    const catalog = await source.viewFor(productIds);
+
     const evaluation = this.opts.engine.evaluate({
       checkpoint,
       policy: this.opts.policy,
       policyVersion: this.opts.policyVersion,
       clock: this.opts.clock,
-      // Live state, deliberately re-read at every checkpoint.
-      catalog: this.opts.state,
+      // Live state, deliberately re-read at every checkpoint — a fresh view each
+      // time, never one carried over from the last.
+      catalog,
       intent: this.intent,
       quote: parts.quote ?? null,
       approval: parts.approval ?? null,
       checkoutIntent: parts.checkoutIntent ?? null,
       paymentAttempt: parts.paymentAttempt ?? null,
       priorCheckoutIntents: parts.priorCheckoutIntents ?? [],
-      capabilities: this.opts.capabilities ?? CapabilitySet.full(),
+      capabilities: source.capabilities(),
     });
 
     this.evaluations.push(evaluation);

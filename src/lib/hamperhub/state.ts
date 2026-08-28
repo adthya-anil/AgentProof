@@ -87,6 +87,126 @@ export class MerchantState {
     }
   }
 
+  /**
+   * Replaces the catalogue with one loaded from a real merchant.
+   *
+   * Necessary because pricing and verification must share a single origin. A quote
+   * priced from the seed catalogue carries `priceVersion: 1`, while a checkpoint
+   * re-reading through an adapter sees a version derived from the merchant's own
+   * data — so INV-PRICE-BINDING compared 1 against a hash, found them different, and
+   * reported that the price had moved while quoting the same ₹599.00 on both sides of
+   * the message. A false violation is worse than a withheld rule: it accuses a correct
+   * integration of a defect, and the report even shows the two identical prices.
+   *
+   * So the merchant's catalogue is loaded once, up front, and everything downstream —
+   * pricing, reservations, and every checkpoint re-read — descends from it.
+   */
+  loadCatalog(
+    products: readonly Product[],
+    stock: ReadonlyMap<string, number>,
+  ): void {
+    this.products.clear();
+    this.inventory.clear();
+    this.reservations.clear();
+    this.changes = [];
+    for (const product of products) {
+      // Versions restart at 1 regardless of what the merchant called them. They are
+      // this engine's own counters from here on, bumped by syncFromMerchant when a
+      // remote value actually moves.
+      this.products.set(product.id, { ...product, priceVersion: 1 });
+      this.inventory.set(product.id, {
+        productId: product.id,
+        available: stock.get(product.id) ?? 0,
+        reserved: 0,
+        version: 1,
+      });
+    }
+  }
+
+  /**
+   * Folds a fresh merchant reading into the local catalogue.
+   *
+   * The alternative — handing the invariants the remote snapshot directly — does not
+   * work, and finding out why was the most useful thing the adapter tests did. A quote
+   * is priced from this catalogue and carries its `priceVersion`; a checkpoint reading
+   * the merchant separately produces a version from the merchant's own data. The two
+   * are not comparable, so INV-PRICE-BINDING compared 1 against a hash, found them
+   * different, and reported that the price had moved — while quoting the same ₹599.00
+   * on both sides of its own message. A false violation accusing a correct integration,
+   * with the evidence of its own wrongness printed in it.
+   *
+   * So there is one catalogue and the merchant is synchronised into it. Versions stay
+   * monotonic counters, which is what the rules want and what a content hash cannot be.
+   * It also restores a property hashing had to give up: A → B → A is version 3 here,
+   * so a price that moved and moved back is still visible as having moved.
+   *
+   * Routed through setPrice and setStock rather than writing the maps directly, so a
+   * merchant-side change is recorded as a StateChange and reaches the audit trail.
+   * Without that, a reader would see a checkout blocked for "catalog prices changed"
+   * with no entry anywhere saying what changed or when.
+   */
+  syncFromMerchant(
+    remote: Product,
+    remoteInventory: InventoryRecord | undefined,
+  ): StateChange[] {
+    const changes: StateChange[] = [];
+    const local = this.products.get(remote.id);
+
+    if (!local) {
+      // A product the merchant has and this catalogue does not. Added rather than
+      // ignored, so a bundle referencing it can be priced.
+      this.products.set(remote.id, { ...remote, priceVersion: 1 });
+      this.inventory.set(remote.id, {
+        productId: remote.id,
+        available: remoteInventory?.available ?? 0,
+        reserved: 0,
+        version: 1,
+      });
+      return changes;
+    }
+
+    if (local.priceMinor !== remote.priceMinor) {
+      changes.push(
+        this.setPrice(remote.id, remote.priceMinor, "merchant catalogue re-read"),
+      );
+    }
+
+    // Safety and floor data are not versioned, so they are refreshed in place. A
+    // merchant correcting an allergen list mid-journey should be honoured immediately;
+    // the alternative is checking a buyer's allergy against data known to be stale.
+    const current = this.products.get(remote.id);
+    if (current) {
+      current.allergens = remote.allergens;
+      current.vegan = remote.vegan;
+      current.minPriceMinor = remote.minPriceMinor;
+      current.bundleEligible = remote.bundleEligible;
+    }
+
+    if (remoteInventory) {
+      const localInventory = this.inventory.get(remote.id);
+      /**
+       * Compared against what the merchant believes is free, plus what this engine is
+       * holding.
+       *
+       * A remote catalogue reports availability with our own reservations already
+       * deducted — it has no idea they exist, but the stock is gone from its count all
+       * the same once it is committed. Comparing its number to our `available` without
+       * adding back what we hold would look like a stock drop on every reservation and
+       * fire the inventory rule against ourselves.
+       */
+      const expected = remote.id
+        ? remoteInventory.available + (localInventory?.reserved ?? 0)
+        : remoteInventory.available;
+      if (localInventory && localInventory.available !== expected) {
+        changes.push(
+          this.setStock(remote.id, expected, "merchant catalogue re-read"),
+        );
+      }
+    }
+
+    return changes;
+  }
+
   // -- reads ---------------------------------------------------------------
 
   listProducts(): Product[] {
@@ -219,6 +339,17 @@ export class MerchantState {
     }
     this.reservations.set(reservation.id, reservation);
     return reservation;
+  }
+
+  /**
+   * Every reservation, for handing to a catalogue adapter.
+   *
+   * A remote catalogue cannot hold stock — it reports what is free and nothing more —
+   * so holds are tracked here and passed to the adapter, which would otherwise present
+   * an inventory rule with a reservation id it has never heard of.
+   */
+  allReservations(): ReadonlyMap<string, Reservation> {
+    return new Map(this.reservations);
   }
 
   getReservation(reservationId: string): Reservation | undefined {
