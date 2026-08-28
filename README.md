@@ -28,7 +28,7 @@ an API key or network access unless you explicitly opt in.
 
 ```bash
 npm install
-npm test                    # 486 tests (2 need DATABASE_URL)
+npm test                    # 505 tests (2 need DATABASE_URL)
 npm run typecheck
 
 npm run demo:happy          # successful ₹1,399 transaction
@@ -344,6 +344,86 @@ whose ids are `sku`, prices are decimal strings under `pricing.retail`, stock is
 passes with no violations, a mid-journey re-price to ₹649 is caught by
 INV-PRICE-BINDING, the truffle's genuinely-unknown allergen data survives the
 translation as `null`, and a three-item basket costs one HTTP call per checkpoint.
+
+---
+
+## The second merchant
+
+Everything above was proved against a test double, which cannot settle the
+question the adapter exists to answer. A double proves the mapping code reads
+fields; it cannot prove the engine copes with a merchant designed without it in
+mind, because the double and the engine share an author, a moment, and a set of
+assumptions.
+
+So Nordwell Provisions is a separate GraphQL service with its own data model,
+served from this app at `/api/merchant/nordwell` and reached over HTTP by the same
+adapter a third party would use. It disagrees with HamperHub about nearly
+everything a mapping has to survive:
+
+| | HamperHub | Nordwell |
+|---|---|---|
+| id | `p-coffee-arabica` | `NW-1001` |
+| price | `priceMinor: 59900` | `pricing.unit.amount: "649.00"` |
+| stock | `available: 8` | `availability.quantity: 12` |
+| vegan | `vegan: true` | `dietary.tags: ["PLANT_BASED"]` |
+| allergens | `allergens: []` | `dietary.contains: "milk, soy"`, or absent |
+| price version | monotonic counter | **none** |
+| reservations | yes | **none** |
+
+```
+npm run build && npm start
+npm run demo:merchant
+```
+
+```
+  Merchant             Nordwell Provisions
+  Transport            graphql — /api/merchant/nordwell
+  Capabilities         7 of 8
+  Engine-tracked       product.priceVersion, inventory.version
+  Not available        reservation.lookup
+
+  NW-1001              ₹649.00  stock 12  vegan true   allergens none declared  coffee
+  NW-1005              ₹515.00  stock 3   vegan false  allergens unknown        mug
+
+  A clean journey:
+    quote              ₹1164
+    checkout           allowed
+    violations         0
+    rules withheld     INV-INVENTORY
+
+  With Nordwell re-pricing between approval and checkout:
+    quoted at          ₹649
+    merchant re-priced ₹699.00
+    checkout           blocked
+    fired              INV-PRICE-BINDING
+```
+
+`INV-INVENTORY` is withheld **by name**, because Nordwell cannot hold stock — not
+counted as a pass it never earned. `INV-PRICE-BINDING` fires despite Nordwell
+having no version field anywhere, because the engine remembers what it last read.
+
+### What running against a real merchant found
+
+Two bugs, neither of which any unit test caught, because the fixtures were written
+from the same assumptions as the code:
+
+**A tag list read as false.** `dietary.tags: ["PLANT_BASED"]` was compared against
+the truthy list *as a whole array*, so it never matched and every tagged product
+came back not-vegan. That is not a missed detection — it is a **false violation**,
+`INV-PRODUCT-SAFETY` rejecting a correct integration for refusing to sell a vegan
+buyer a vegan product. Tag lists are how most storefronts express a flag; no
+fixture had one.
+
+**A re-price that never happened.** The first demo called a local setter to move
+the price while the catalogue was served by another process, then reported that a
+price change went undetected. Nothing had changed. Nordwell now has admin
+mutations, and the demo re-prices *through the merchant* — which is also how a real
+merchant would do it.
+
+The service is deliberately awkward in the ways real ones are: results come back
+in **its** order rather than the order asked, unknown ids are simply absent, and a
+failure is an `errors` array beside HTTP 200. Each would break a client that zips
+by position or trusts a status code.
 
 ---
 
@@ -1047,7 +1127,7 @@ src/app/api/preflight/          Suite runner as a server-sent event stream
 src/app/                        Next.js dashboard (server components elsewhere)
 src/scripts/                    Runnable demos and database tooling
 scripts/dev-db.sh               Local Postgres for development
-tests/                          486 tests
+tests/                          505 tests
 ```
 
 Money is an integer count of paise throughout. Float rupees are banned: an
@@ -1087,9 +1167,12 @@ Honest scope. What is built is listed above; these are the real gaps:
   and the shared claim table; without it the guarantee is exactly the
   single-process one it always was. The preflight Engine panel names which is in
   force, because the two are indistinguishable from the outside until they are not.
-- **One merchant, one policy.** HamperHub is the only integration under test, so
-  the Guard's independence from a specific commerce backend is a design property
-  rather than a demonstrated one.
+- **Two merchants, one policy.** The Guard's independence from a commerce backend
+  is now demonstrated rather than asserted — Nordwell is a separate GraphQL
+  service with its own data model, and running the real rules against it found two
+  bugs a test double had not. But both merchants are still *ours*. Neither has the
+  pagination, rate limits, partial failures or eventual consistency of a real
+  storefront, and the policy is still the single `hamperhub-v1` file.
 - **A unique row, not a lock, for double charges.** A lock narrows the window; a
   constraint removes it. `payable_order_claims` is written on the authorization
   path with `insert ... on conflict do nothing returning`, so whoever inserts owns

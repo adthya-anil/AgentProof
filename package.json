@@ -22,7 +22,8 @@
     "demo:defects": "tsx src/scripts/seeded-defects.ts",
     "demo:preflight": "tsx src/scripts/preflight.ts",
     "demo:concurrency": "tsx src/scripts/concurrency.ts",
-    "demo:razorpay": "tsx src/scripts/razorpay-live.ts"
+    "demo:razorpay": "tsx src/scripts/razorpay-live.ts",
+    "demo:merchant": "tsx src/scripts/second-merchant.ts"
   },
   "dependencies": {
     "next": "^15.5.24",
