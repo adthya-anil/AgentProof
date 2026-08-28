@@ -58,3 +58,36 @@ function asCount(value: unknown): number {
     ? Math.trunc(value)
     : 0;
 }
+
+
+/**
+ * Describes promotions the merchant refused.
+ *
+ * A quote reading "discounts ₹0" after the agent asked for FESTIVE10 is
+ * indistinguishable from a promo code being silently swallowed. Naming the code and
+ * the reason is the difference between a merchant correctly enforcing a 5% cap and
+ * one quietly dropping requests — and only one of those is a defect.
+ *
+ * Returns a leading separator so it can be appended to an existing detail line, or
+ * undefined when every requested promotion applied.
+ */
+export function describeRejectedPromos(value: unknown): string | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+
+  const described = value
+    .filter(
+      (entry): entry is { code: unknown; reason?: unknown } =>
+        typeof entry === "object" && entry !== null && "code" in entry,
+    )
+    .map((entry) => {
+      const code = String(entry.code);
+      const reason =
+        typeof entry.reason === "string" && entry.reason.length > 0
+          ? entry.reason
+          : "refused";
+      return `${code} (${reason})`;
+    });
+
+  if (described.length === 0) return undefined;
+  return ` — refused: ${described.join("; ")}`;
+}

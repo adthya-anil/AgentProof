@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  describeRejectedPromos,
   describeRuleCounts,
   describeSkipped,
 } from "../src/lib/policy/describeCounts.js";
@@ -80,5 +81,92 @@ describe("naming the rules that did not apply", () => {
     // Arrives from a JSON audit payload, so the shape is not guaranteed.
     expect(describeSkipped("INV-A")).toBeUndefined();
     expect(describeSkipped([1, null])).toBeUndefined();
+  });
+});
+
+
+describe("describing refused promotions", () => {
+  /**
+   * A quote showing "discounts ₹0" after the agent asked for FESTIVE10 is
+   * indistinguishable from a promo code being silently swallowed. The agent was
+   * always told in the tool response; the audit trail was not, so a reader of the
+   * trace could not tell a correctly enforced 5% cap from a merchant quietly
+   * dropping requests. Only one of those is a defect.
+   */
+  it("names the code and the reason it was refused", () => {
+    expect(
+      describeRejectedPromos([
+        { code: "FESTIVE10", reason: "Component rate 10% exceeds cap" },
+      ]),
+    ).toBe(" — refused: FESTIVE10 (Component rate 10% exceeds cap)");
+  });
+
+  it("lists several refusals", () => {
+    expect(
+      describeRejectedPromos([
+        { code: "A", reason: "one" },
+        { code: "B", reason: "two" },
+      ]),
+    ).toBe(" — refused: A (one); B (two)");
+  });
+
+  it("still names a code that arrived without a reason", () => {
+    // Better to report the refusal without a reason than to hide it.
+    expect(describeRejectedPromos([{ code: "FESTIVE10" }])).toBe(
+      " — refused: FESTIVE10 (refused)",
+    );
+  });
+
+  it("says nothing when every promotion applied", () => {
+    expect(describeRejectedPromos([])).toBeUndefined();
+    expect(describeRejectedPromos(undefined)).toBeUndefined();
+  });
+
+  it("ignores a malformed payload rather than rendering junk", () => {
+    expect(describeRejectedPromos("FESTIVE10")).toBeUndefined();
+    expect(describeRejectedPromos([null, 42])).toBeUndefined();
+  });
+});
+
+describe("the audit trail records a refused promotion", () => {
+  /**
+   * The gap this closes: the tool response carried `rejected_promo_codes` and the
+   * `quote.created` audit event did not, so the tamper-evident log — the record the
+   * whole product rests on — omitted a declined 10% discount.
+   */
+  it("puts refused promotions in the quote.created event", async () => {
+    const { createEnvironment, createIntent } = await import(
+      "../src/lib/harness.js"
+    );
+    const { MutationSet } = await import("../src/lib/hamperhub/mutations.js");
+
+    const env = createEnvironment({ mutations: MutationSet.fixed() });
+    const intent = createIntent(env.ids, env.clock, {
+      runId: "promo-audit",
+      utterance: "coffee hamper",
+      maxBudget: 1500,
+    });
+    env.guard.beginIntent(intent);
+
+    const bundle = await env.guard.callTool("create_bundle", {
+      items: [{ product_id: "p-coffee-arabica", quantity: 1 }],
+      // 10% against a 5% cap: must be refused, and the refusal must be recorded.
+      promo_codes: ["FESTIVE10"],
+    });
+    if (!bundle.ok) throw new Error(`bundle failed: ${bundle.reason}`);
+
+    await env.guard.callTool("create_quote", {
+      bundle_id: (bundle.data as { bundle_id: string }).bundle_id,
+    });
+
+    const event = env.audit.all().find((e) => e.type === "quote.created");
+    const refused = (event?.output as { rejected_promo_codes?: unknown })
+      ?.rejected_promo_codes;
+
+    expect(Array.isArray(refused)).toBe(true);
+    expect(refused).toHaveLength(1);
+    expect((refused as Array<{ code: string }>)[0]!.code).toBe("FESTIVE10");
+    // And it reads as a cap decision, not a mystery.
+    expect(describeRejectedPromos(refused)).toMatch(/FESTIVE10/);
   });
 });

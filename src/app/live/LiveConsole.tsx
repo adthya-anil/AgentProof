@@ -8,6 +8,7 @@ import {
 } from "@/lib/live/scopedRecheck";
 import type { RecheckResult } from "@/lib/live/session";
 import {
+  describeRejectedPromos,
   describeRuleCounts,
   describeSkipped,
 } from "@/lib/policy/describeCounts";
@@ -663,7 +664,17 @@ function toRow(event: SerialisedAuditEvent): Row | null {
         icon: "₹",
         tone: "neutral",
         title: `Quote ${out.quote_id ?? ""} priced at ₹${out.total ?? ""}`,
-        detail: `subtotal ₹${out.subtotal ?? ""}, discounts ₹${out.total_discount ?? 0}`,
+        /**
+         * Names refused promotions alongside the total.
+         *
+         * "discounts ₹0" after an agent asked for FESTIVE10 is indistinguishable
+         * from a promo code being silently swallowed. Saying which code was
+         * refused, and why, is the difference between a merchant correctly
+         * enforcing a 5% cap and one quietly dropping requests.
+         */
+        detail:
+          `subtotal ₹${out.subtotal ?? ""}, discounts ₹${out.total_discount ?? 0}` +
+          (describeRejectedPromos(out.rejected_promo_codes) ?? ""),
         payload: out.line_items,
       };
 

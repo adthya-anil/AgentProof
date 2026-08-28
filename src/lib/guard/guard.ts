@@ -283,7 +283,20 @@ export class Guard {
     this.audit("quote.created", {
       toolName: "create_quote",
       quoteId: quote.id,
-      output: this.quoteSummary(quote),
+      output: {
+        ...this.quoteSummary(quote),
+        /**
+         * Promotions the merchant refused, and why.
+         *
+         * The agent was already told this in the tool response; the audit log was
+         * not. So a trace showed "subtotal ₹1,247, discounts ₹0" after a request
+         * for FESTIVE10, and a reader could not tell a correctly refused 10%
+         * promotion from one silently swallowed. A discount declined against a
+         * policy cap is a money-relevant decision, which is exactly what this log
+         * exists to record.
+         */
+        rejected_promo_codes: rejectedPromos,
+      },
     });
 
     const evaluation = this.evaluate("quote.created", { quote });
