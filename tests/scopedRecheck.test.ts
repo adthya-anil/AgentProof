@@ -55,6 +55,51 @@ describe("which result is visible", () => {
   });
 });
 
+describe("when the pay call-to-action must disappear", () => {
+  /**
+   * Leaving a "Pay" button beside a captured payment invites a second attempt, in a
+   * tool whose entire argument is that money must not move twice for one intent.
+   *
+   * The console derives this from `verified`, and these pin why it cannot be
+   * `fulfilled`: a payment the provider captured but whose fulfilment the Guard then
+   * refused is still money collected, and still must not be paid again.
+   */
+  const isSettled = (
+    stored: ScopedRecheck | null,
+    sessionId: string | null,
+  ): boolean => visibleRecheck(stored, sessionId)?.verified === true;
+
+  it("retires the button once the money is captured", () => {
+    expect(isSettled(stored, "session-a")).toBe(true);
+  });
+
+  it("retires it even when fulfilment was refused after capture", () => {
+    const refused: ScopedRecheck = {
+      sessionId: "session-a",
+      result: result({ verified: true, fulfilled: false }),
+    };
+    expect(isSettled(refused, "session-a")).toBe(true);
+  });
+
+  it("keeps the button while the payment is outstanding", () => {
+    const unpaid: ScopedRecheck = {
+      sessionId: "session-a",
+      result: result({ verified: false, fulfilled: false, status: "created" }),
+    };
+    expect(isSettled(unpaid, "session-a")).toBe(false);
+  });
+
+  it("keeps the button on a new run, whatever the previous one did", () => {
+    // The reported bug in its other guise: a settled previous payment must not
+    // remove the call to action for an order that has not been paid.
+    expect(isSettled(stored, "session-b")).toBe(false);
+  });
+
+  it("keeps the button before any re-check has happened", () => {
+    expect(isSettled(null, "session-a")).toBe(false);
+  });
+});
+
 describe("whether to keep watching for payment", () => {
   it("watches a new session with no result yet", () => {
     expect(shouldWatchPayment(null, "session-a")).toBe(true);
