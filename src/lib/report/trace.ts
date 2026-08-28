@@ -107,8 +107,19 @@ function summarizeEvent(event: AuditEvent, showPasses: boolean): string | null {
       return `Merchant order ${output.order_id} confirmed for ₹${output.amount}`;
     case "reservation.released":
       return `Reservation released — ${event.reason}`;
-    case "catalog.state_changed":
-      return `State changed — ${event.reason}`;
+    case "catalog.state_changed": {
+      // The numbers are the substance. "State changed — supplier cost increase"
+      // tells a reader something moved but not what, so it cannot be checked
+      // against the violation it caused.
+      const out = (event.output ?? {}) as Record<string, unknown>;
+      const what = out.kind === "price" ? "price" : "stock";
+      const scope = out.product_id ? ` for ${String(out.product_id)}` : "";
+      const movement =
+        out.from !== undefined && out.to !== undefined
+          ? `: ${String(out.from)} → ${String(out.to)}`
+          : "";
+      return `Merchant ${what} changed${scope}${movement} — ${event.reason}`;
+    }
     case "run.started":
     case "run.completed":
       return `${event.type}: ${event.reason ?? ""}`;

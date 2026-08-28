@@ -12,8 +12,8 @@ export const dynamic = "force-dynamic";
  * practice and the honest way to report recall: with several defects active an
  * upstream block can mask a downstream one.
  */
-export default function EvaluationPage() {
-  const summary = getEvaluationSummary();
+export default async function EvaluationPage() {
+  const summary = await getEvaluationSummary();
 
   if (!summary) {
     return (

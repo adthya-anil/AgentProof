@@ -309,3 +309,26 @@ ALTER TABLE suites
 -- Answering "which model tripped this invariant" is the point of running more
 -- than one, so it should not require a sequential scan.
 CREATE INDEX IF NOT EXISTS test_runs_model_idx ON test_runs (model);
+
+
+-- ---------------------------------------------------------------------------
+-- Replay snapshot
+-- ---------------------------------------------------------------------------
+--
+-- The normalised tables above are the *analytical* surface: they exist so you can
+-- ask questions across runs in SQL — which model tripped which invariant, how
+-- recall moved between policy versions, whether every stored hash chain still
+-- verifies.
+--
+-- They are deliberately not a lossless copy. Eight fields of a JourneyResult have
+-- no column, because they are replay detail rather than things worth querying:
+-- exercised invariants, tool paths, per-journey perturbation records, and so on.
+-- Reconstructing a dashboard from the tables alone would therefore render a report
+-- subtly poorer than the one that was produced, with empty tool paths and missing
+-- escalations, and a reader would have no way to know which absences were real.
+--
+-- So a run also stores an exact snapshot. Two surfaces, two jobs: query the tables,
+-- replay the snapshot. Adding columns for the missing eight would bloat the schema
+-- with fields nobody would ever filter on, and would still drift the moment
+-- JourneyResult gained a field.
+ALTER TABLE suites ADD COLUMN IF NOT EXISTS result JSONB;

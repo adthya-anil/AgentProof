@@ -95,9 +95,21 @@ export class Guard {
   private intent!: BuyerIntent;
 
   /** Binds the Guard to a buyer intent and opens the audit trail for it. */
+  /** Unsubscribes the state-change observer when a journey ends. */
+  private unobserveState: (() => void) | undefined;
+
+  /**
+   * Provider order ids already recorded in this journey.
+   *
+   * Lets a repeated authorisation be reported as a reconciliation rather than a
+   * second creation.
+   */
+  private seenProviderOrderIds = new Set<string>();
+
   beginIntent(intent: BuyerIntent): void {
     this.intent = intent;
     this.financialActionTaken = false;
+    this.seenProviderOrderIds.clear();
     this.opts.audit.append({
       type: "intent.received",
       runId: intent.runId,
@@ -114,6 +126,41 @@ export class Guard {
       },
       policyVersion: this.opts.policyVersion,
     });
+
+    /**
+     * Record price and stock movements for the rest of this journey.
+     *
+     * The trail used to show `INV-PRICE-BINDING` firing with no entry saying a
+     * price had moved: a quote agreed, an approval, then a checkout blocked for
+     * "catalog prices changed", and nothing anywhere recording what changed, when
+     * or why. The cause of the most interesting violations was the one thing
+     * missing from the record of them.
+     *
+     * Subscribed here rather than at construction so every entry carries the
+     * journey's own run and intent ids, which is what makes the change attributable
+     * to the transaction it interfered with.
+     */
+    this.unobserveState?.();
+    this.unobserveState = this.opts.state.observeChanges((change) => {
+      this.audit("catalog.state_changed", {
+        reason: change.reason,
+        output: {
+          kind: change.kind,
+          product_id: change.productId,
+          // Prices are minor units; stock is a count. Reporting both raw keeps
+          // this honest rather than guessing at a formatter per kind.
+          from: change.kind === "price" ? toMajor(change.from) : change.from,
+          to: change.kind === "price" ? toMajor(change.to) : change.to,
+          new_version: change.newVersion,
+        },
+      });
+    });
+  }
+
+  /** Stops recording state changes for the finished journey. */
+  endIntent(): void {
+    this.unobserveState?.();
+    this.unobserveState = undefined;
   }
 
   /**
@@ -283,7 +330,20 @@ export class Guard {
     this.audit("quote.created", {
       toolName: "create_quote",
       quoteId: quote.id,
-      output: this.quoteSummary(quote),
+      output: {
+        ...this.quoteSummary(quote),
+        /**
+         * Promotions the merchant refused, and why.
+         *
+         * The agent was already told this in the tool response; the audit log was
+         * not. So a trace showed "subtotal ₹1,247, discounts ₹0" after a request
+         * for FESTIVE10, and a reader could not tell a correctly refused 10%
+         * promotion from one silently swallowed. A discount declined against a
+         * policy cap is a money-relevant decision, which is exactly what this log
+         * exists to record.
+         */
+        rejected_promo_codes: rejectedPromos,
+      },
     });
 
     const evaluation = this.evaluate("quote.created", { quote });
@@ -489,6 +549,21 @@ export class Guard {
     const provider = this.opts.paymentProvider;
     const isRazorpay = provider?.isReal === true && provider.name === "razorpay";
 
+    /**
+     * Was an order created, or an existing one returned?
+     *
+     * A correct integration reconciles a repeated idempotency key by returning the
+     * order it already made. The event said `payment.order_created` both times, so a
+     * duplicated delivery produced two creation entries for one order — and the
+     * journey that proves idempotency works was the one that looked like it had
+     * created two payable orders.
+     *
+     * Recorded rather than inferred, because "the same id appears twice" is exactly
+     * the ambiguity a reader should not have to resolve for themselves.
+     */
+    const reconciled = this.seenProviderOrderIds.has(attempt.providerOrderId);
+    this.seenProviderOrderIds.add(attempt.providerOrderId);
+
     this.audit(
       isRazorpay ? "razorpay.order_created" : "payment.order_created",
       {
@@ -496,13 +571,19 @@ export class Guard {
         quoteId: quote.id,
         providerOrderId: attempt.providerOrderId,
         decision: "allow",
-        reason: `Authorised ${formatMinor(attempt.amountMinor)} after ${
-          evaluation.evaluatedCount
-        } invariants passed`,
+        reason: reconciled
+          ? `Reconciled to existing order ${attempt.providerOrderId} — repeated ` +
+            `idempotency key, no second order created`
+          : `Authorised ${formatMinor(attempt.amountMinor)} after ${
+              evaluation.evaluatedCount
+            } invariants passed`,
         output: {
           payment_attempt_id: attempt.id,
           provider_order_id: attempt.providerOrderId,
           amount: toMajor(attempt.amountMinor),
+          // False means an order was created here; true means one already existed
+          // and was returned. The difference is whether money could move twice.
+          reconciled,
           // Recorded explicitly so no reader has to infer it.
           provider: provider?.name ?? "unknown",
           provider_is_real: provider?.isReal ?? false,
@@ -689,6 +770,13 @@ export class Guard {
         evaluated: evaluation.evaluatedCount,
         passed: evaluation.passedCount,
         skipped: evaluation.skippedCount,
+        // Named, not just counted. "One rule did not apply" invites the question
+        // "which one?", and that question is exactly how coverage is judged —
+        // INV-PRODUCT-SAFETY skipping because no allergens were declared is
+        // correct, whereas it skipping on an allergic buyer would be a hole.
+        skippedInvariants: evaluation.results
+          .filter((r) => r.status === "skipped")
+          .map((r) => r.invariantId),
         violations: evaluation.violations.map((v) => ({
           invariant: v.invariantId,
           severity: v.severity,

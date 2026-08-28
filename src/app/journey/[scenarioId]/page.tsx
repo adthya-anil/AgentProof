@@ -32,7 +32,7 @@ export default async function JourneyPage({
 }) {
   const [{ scenarioId }, query] = await Promise.all([params, searchParams]);
   const variant = parseVariant(query.integration);
-  const journey = getJourney(variant, decodeURIComponent(scenarioId));
+  const journey = await getJourney(variant, decodeURIComponent(scenarioId));
 
   if (!journey) notFound();
 
