@@ -69,28 +69,34 @@ export async function GET(request: Request): Promise<Response> {
 
       try {
         /**
-         * Payments: simulated unless real ones are asked for.
+         * Preflight is always simulated, and that is not a limitation.
          *
-         * This route used to build a Razorpay adapter, print its name in the
-         * header, and then never pass it to the runner — so the report announced
-         * "razorpay test mode (rzp_test_…)" while every journey ran against the
-         * simulated provider. A false claim about money is the single worst thing
-         * this tool could put on a screen.
+         * Real payments were offered here and it was a mistake. A suite creates
+         * dozens of payment links and no human is going to pay them, so every
+         * journey ends with an uncaptured payment — which means:
          *
-         * Simulated stays the default because a suite is dozens of journeys and a
-         * real order per checkout is a lot of live side effects. But the label now
-         * describes what actually happened, and real can be chosen deliberately.
+         *  - `INV-PAYMENT-STATE` fires on journeys that did nothing wrong, adding
+         *    ₹5,644 of "money at risk, prevented" to a 12-journey run. Nothing was at
+         *    risk. That was 43% of the headline figure, fabricated.
+         *  - Defect detection *drops*, from 3 unsafe violations to 2, because
+         *    scenarios that need a provider timeout cannot run against a real one.
+         *  - Healthy journeys can never complete, so the signal that a correct
+         *    integration works disappears entirely.
+         *
+         * A worse report and a Razorpay account full of junk orders, in exchange for
+         * proving only that the API can be called. `/live` proves that properly, with
+         * one link a person actually pays, and `npm run demo:razorpay` does it from a
+         * terminal.
          */
-        const wantsRealPayments = url.searchParams.get("payments") === "razorpay";
-        const realPayments = wantsRealPayments ? razorpayFromEnv() : null;
-
-        if (wantsRealPayments && !realPayments) {
+        if (url.searchParams.get("payments") === "razorpay") {
           send({
             kind: "error",
             message:
-              "Real payments were requested but RAZORPAY_KEY_ID and " +
-              "RAZORPAY_KEY_SECRET are not both set. Nothing was substituted — a " +
-              "run labelled as using Razorpay must actually use it.",
+              "Preflight runs on the simulated provider. A suite creates dozens of " +
+              "payment links nobody will pay, which inflates money-at-risk with " +
+              "amounts that were never at risk and stops the timeout scenarios from " +
+              "running at all. To make a real Razorpay payment, use the Live agent " +
+              "tab — one journey, one link, and the page syncs when you pay it.",
           });
           controller.enqueue(encoder.encode("event: end\ndata: {}\n\n"));
           controller.close();
@@ -136,11 +142,7 @@ export async function GET(request: Request): Promise<Response> {
         const intel = previous ? intelFrom(previous.suite) : EMPTY_INTEL;
 
         const policy = loadPolicyFromFile();
-        // Describes what the journeys will really use, not what is merely
-        // configured in the environment.
-        const paymentAdapter = realPayments
-          ? `razorpay test mode (${process.env.RAZORPAY_KEY_ID})`
-          : "simulated (no real payment calls)";
+        const paymentAdapter = "simulated (no real payment calls)";
 
         send({
           kind: "start",
@@ -196,8 +198,6 @@ export async function GET(request: Request): Promise<Response> {
         });
 
         const suite = await runSuite(assembled.scenarios, {
-          // The provider the journeys actually talk to.
-          ...(realPayments ? { paymentProvider: realPayments } : {}),
           mutations:
             variant === "vulnerable"
               ? MutationSet.vulnerable()

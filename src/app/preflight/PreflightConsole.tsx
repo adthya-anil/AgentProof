@@ -13,7 +13,6 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
  */
 
 type RunSize = "quick" | "standard" | "compare";
-type Payments = "simulated" | "razorpay";
 type Driver = "deterministic" | "agent";
 
 interface ModelBreakdown {
@@ -89,7 +88,6 @@ export default function PreflightConsole({
    * of live side effects to create by pressing one button. The important part is
    * not the default but that the report says which one actually ran.
    */
-  const [payments, setPayments] = useState<Payments>("simulated");
 
   /** Which journey row is expanded, if any. */
   const [openRow, setOpenRow] = useState<string | null>(null);
@@ -128,7 +126,6 @@ export default function PreflightConsole({
     const params = new URLSearchParams({
       variant,
       size,
-      payments,
     });
     const source = new EventSource(`/api/preflight?${params.toString()}`);
     sourceRef.current = source;
@@ -209,7 +206,7 @@ export default function PreflightConsole({
       setRunning(false);
       source.close();
     };
-  }, [variant, size, payments]);
+  }, [variant, size]);
 
   const stop = useCallback(() => {
     sourceRef.current?.close();
@@ -260,18 +257,6 @@ export default function PreflightConsole({
               <option value="quick">Quick — 15 journeys, seconds</option>
               <option value="standard">Standard — 30 journeys, a few minutes</option>
               <option value="compare">Compare models — 45 journeys</option>
-            </select>
-          </label>
-
-          <label className="check">
-            Payments
-            <select
-              value={payments}
-              onChange={(e) => setPayments(e.target.value as Payments)}
-              disabled={running}
-            >
-              <option value="simulated">Simulated</option>
-              <option value="razorpay">Real Razorpay test mode</option>
             </select>
           </label>
 

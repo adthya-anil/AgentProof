@@ -279,3 +279,67 @@ describe("the README's measured results match a real run", () => {
     expect(new Set(AUDIT_EVENT_TYPES).size).toBe(AUDIT_EVENT_TYPES.length);
   });
 });
+
+
+describe("money at risk means money that was at risk", () => {
+  /**
+   * Preflight offered real Razorpay payments, and it was a mistake.
+   *
+   * A suite creates dozens of payment links and nobody pays them, so every journey
+   * ends with an uncaptured payment. `INV-PAYMENT-STATE` then fires on journeys that
+   * did nothing wrong — `reg-01-normal` and `reg-02-max-amount` are ordinary
+   * transactions, not tests of payment state — and their amounts were added to "money
+   * at risk, prevented". Measured on a 12-journey run: ₹5,644 of a ₹13,189.56
+   * headline, or 43% of it, describing money that was never at risk.
+   *
+   * It also detected *fewer* defects (3 unsafe violations became 2, because a
+   * provider-timeout scenario cannot run against a real provider) and no healthy
+   * journey could complete, so the signal that a correct integration works vanished.
+   *
+   * A worse report and an account full of junk orders, in exchange for proving that
+   * an API can be called — which `/live` proves properly, with a link a person pays.
+   */
+  it("does not count a rule firing on a journey that was not testing it", async () => {
+    const { runSuite } = await import("../src/lib/runner/run.js");
+    const suite = await runSuite(REGRESSION_SCENARIOS, {
+      mutations: MutationSet.vulnerable(),
+    });
+
+    // On the simulated provider, INV-PAYMENT-STATE fires only where it is the point:
+    // reg-11 deliberately attempts fulfilment on an uncaptured payment.
+    const firing = suite.journeys.filter((j) =>
+      j.firedInvariants.includes("INV-PAYMENT-STATE"),
+    );
+
+    for (const journey of firing) {
+      expect(
+        journey.targetsInvariant,
+        `${journey.scenarioId} fired INV-PAYMENT-STATE without targeting it, which ` +
+          `inflates money-at-risk with money that was never at risk`,
+      ).toBe("INV-PAYMENT-STATE");
+    }
+  });
+
+  it("lets a healthy journey actually complete", async () => {
+    // The signal that disappeared under real payments. Without it, a clean run and a
+    // run where nothing could finish look the same.
+    const { runSuite } = await import("../src/lib/runner/run.js");
+    const suite = await runSuite(REGRESSION_SCENARIOS, {
+      mutations: MutationSet.fixed(),
+    });
+    expect(suite.passed).toBeGreaterThan(0);
+  });
+
+  it("keeps the timeout scenario runnable", async () => {
+    // reg-05 works by forcing a provider timeout, which a real provider cannot be
+    // asked to do. Under real payments it went inconclusive — a defect stopped being
+    // detected while the report looked just as full.
+    const { runScenario } = await import("../src/lib/runner/run.js");
+    const scenario = REGRESSION_SCENARIOS.find((s) => s.faults !== undefined)!;
+    const journey = await runScenario(scenario, {
+      mutations: MutationSet.vulnerable(),
+    });
+    expect(journey.disposition).not.toBe("inconclusive");
+    expect(journey.firedInvariants).toContain("INV-IDEMPOTENCY");
+  });
+});

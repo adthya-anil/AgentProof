@@ -414,19 +414,45 @@ goal, because neither tried to pay twice. Drop the deterministic half and you st
 detecting the defect; drop the live half and you never learn how a real agent
 behaves.
 
-### Paying a real link syncs on its own
+### Preflight is simulated. Real payments live on `/live`
 
-A hosted payment link is asynchronous. The agent creates it, the Guard authorises
-it, `INV-PAYMENT-STATE` refuses to fulfil while the payment is uncaptured — the
-correct answer at that moment — and then a human goes and pays, minutes later.
+Preflight always uses the simulated provider, and that is a correctness decision
+rather than a limitation.
 
-Both halves of the sync exist, because they solve different problems:
+Real Razorpay payments were offered in preflight and it was a mistake. A suite creates
+dozens of payment links and nobody is going to pay them, so every journey ends holding
+an uncaptured payment. Measured on a 12-journey run:
+
+| | Simulated | Real Razorpay |
+|---|---|---|
+| Money at risk, prevented | ₹8,944.56 | ₹13,189.56 |
+| **of which was never at risk** | ₹0 | **₹5,644 — 43% of the headline** |
+| Defects detected | **3** | 2 |
+| Healthy journeys completed | 2 | **0** |
+
+`INV-PAYMENT-STATE` fires on `reg-01-normal` and `reg-02-max-amount` — ordinary
+transactions, not tests of payment state — because the merchant correctly refuses to
+dispatch against money that has not arrived. Correct behaviour, counted as a prevented
+loss. Detection also *drops*, because a scenario that works by forcing a provider
+timeout cannot ask that of a real provider.
+
+A worse report and a Razorpay account full of junk orders, in exchange for proving
+that an API can be called.
+
+### A real payment, properly
+
+`/live` is where money actually moves: one journey, one payment link, and a human pays
+it. That proves the integration in a way a suite of unpayable links cannot.
+
+A hosted link is asynchronous — the agent creates it, the Guard authorises it,
+`INV-PAYMENT-STATE` refuses to fulfil while the payment is uncaptured, and then a
+person pays minutes later. Both halves of the sync exist:
 
 - **Polling.** While a payment is outstanding the console asks Razorpay every four
-  seconds, for up to five minutes. Pay in the other tab and the page updates on its
-  own. This is what works on a laptop, since Razorpay cannot reach `localhost`.
-- **Webhook** at `/api/razorpay/webhook`, for a deployed URL. Point Razorpay at it
-  for `payment_link.paid` and `payment.captured`.
+  seconds, for up to five minutes. Pay in the other tab and the page updates itself.
+  This is what works on a laptop, since Razorpay cannot reach `localhost`.
+- **Webhook** at `/api/razorpay/webhook`, for a deployed URL, on
+  `payment_link.paid` and `payment.captured`.
 
 Two rules govern the webhook, and both are refusals:
 
@@ -434,16 +460,14 @@ Two rules govern the webhook, and both are refusals:
    `RAZORPAY_WEBHOOK_SECRET`, in constant time, over the exact raw bytes. An unset
    secret rejects everything — it fails closed, because an unauthenticated webhook
    that marks orders paid is a way for anyone to have goods dispatched for free.
-2. **The payload is a trigger, not a source of truth.** Even once verified, no
-   amount or status is read out of it. The handler goes and asks Razorpay what
-   happened and puts that answer through the same Guard checkpoints as everything
-   else, so the settlement path is identical whether a person or a provider
-   initiated it.
+2. **The payload is a trigger, not a source of truth.** Even once verified, no amount
+   or status is read from it. The handler asks Razorpay what happened and puts that
+   answer through the same Guard checkpoints as everything else.
 
 Verified against a running server: a forged signature, a missing signature, and a
-valid signature over a swapped body are all `401`; an authentic event for a journey
-no longer in memory is `200 matched=false`; and an event that is not a payment
-completion is acknowledged and ignored rather than retried.
+valid signature over a swapped body are all `401`; an authentic event for a journey no
+longer in memory is `200 matched=false`; an event that is not a payment completion is
+acknowledged and ignored rather than retried.
 
 ### Inconclusive is a real outcome
 
