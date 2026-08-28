@@ -186,3 +186,81 @@ describe("the declared vocabulary is not aspirational", () => {
     expect(seen.has("payment.order_created")).toBe(true);
   });
 });
+
+
+describe("a reconciled retry is not a second order", () => {
+  /**
+   * `pert-02` delivers `create_checkout` twice. On the fixed integration the merchant
+   * reconciles: same idempotency key, same checkout intent, same payment attempt,
+   * same provider order. One order.
+   *
+   * It was reported as `providerOrders=2`, because the count came from
+   * `payment.order_created` events and the reconciled path emits one for the order it
+   * returned. So the single journey that proves idempotency works was the one that
+   * looked like it had created two payable orders — on the *fixed* integration,
+   * beside `passed` and zero escapes.
+   */
+  async function duplicatedDelivery(variant: "vulnerable" | "fixed") {
+    const { PERTURBATION_SCENARIOS } = await import(
+      "../src/lib/scenarios/perturbations.js"
+    );
+    const scenario = PERTURBATION_SCENARIOS.find((s) =>
+      s.id.startsWith("pert-02"),
+    )!;
+    return runScenario(scenario, {
+      mutations:
+        variant === "fixed" ? MutationSet.fixed() : MutationSet.vulnerable(),
+    });
+  }
+
+  it("counts one provider order when a duplicate delivery is reconciled", async () => {
+    const journey = await duplicatedDelivery("fixed");
+
+    expect(journey.disposition).toBe("passed");
+    expect(journey.providerOrders).toBe(1);
+    expect(journey.duplicatePayableOrders).toBe(0);
+  });
+
+  it("records the reconciliation rather than implying a second creation", async () => {
+    const journey = await duplicatedDelivery("fixed");
+    const created = journey.auditTrail.filter((e) =>
+      e.type.endsWith("order_created"),
+    );
+
+    // Two entries, because the merchant handled two requests — but only one of them
+    // created anything, and the trail now says which.
+    expect(created).toHaveLength(2);
+    const flags = created.map(
+      (e) => (e.output as { reconciled: boolean }).reconciled,
+    );
+    expect(flags).toEqual([false, true]);
+
+    const ids = new Set(
+      created.map((e) => (e.output as { provider_order_id: string }).provider_order_id),
+    );
+    expect(ids.size, "one order, referenced twice").toBe(1);
+    expect(created[1]!.reason).toMatch(/no second order created/);
+  });
+
+  it("still catches the vulnerable integration creating a real duplicate", async () => {
+    // The fix must not make the defect harder to see: missing idempotency should
+    // still trip INV-IDEMPOTENCY rather than being quietly deduplicated away.
+    const journey = await duplicatedDelivery("vulnerable");
+    expect(journey.disposition).toBe("unsafe_violation");
+    expect(journey.firedInvariants).toContain("INV-IDEMPOTENCY");
+  });
+
+  it("counts distinct orders, not order events", async () => {
+    // The property behind the fix, stated directly: providerOrders must never exceed
+    // the number of distinct provider order ids in the trail.
+    for (const variant of ["vulnerable", "fixed"] as const) {
+      const journey = await duplicatedDelivery(variant);
+      const distinct = new Set(
+        journey.auditTrail
+          .filter((e) => e.type.endsWith("order_created"))
+          .map((e) => (e.output as { provider_order_id: string }).provider_order_id),
+      );
+      expect(journey.providerOrders, variant).toBe(distinct.size);
+    }
+  });
+});

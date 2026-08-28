@@ -284,12 +284,34 @@ export async function runScenario(
      * duplicate-order column silently stopped working in exactly the
      * configuration where a duplicate order costs actual money.
      */
-    const providerOrders = env.audit
-      .all()
-      .filter(
-        (e) =>
-          e.type === "razorpay.order_created" || e.type === "payment.order_created",
-      ).length;
+    /**
+     * Distinct provider orders, counted by id.
+     *
+     * Counting the events double-counted a correctly deduplicated retry: a duplicated
+     * delivery makes the merchant handle `create_checkout` twice, and when
+     * idempotency works it returns the *same* order both times — one order,
+     * `payment.order_created` twice. The journey then reported `providerOrders=2`
+     * beside `passed` and no escapes, which reads as "two orders were created" on the
+     * one journey that proves they were not.
+     *
+     * By id, not by event, because the id is the thing that could cost money twice.
+     */
+    const providerOrders = new Set(
+      env.audit
+        .all()
+        .filter(
+          (e) =>
+            e.type === "razorpay.order_created" ||
+            e.type === "payment.order_created",
+        )
+        .map(
+          (e) =>
+            (e.output as { provider_order_id?: string } | null)
+              ?.provider_order_id ??
+            e.providerOrderId ??
+            `unidentified-${e.seq}`,
+        ),
+    ).size;
 
     // Only orders the merchant actually recorded as payable count as duplicates;
     // an order the provider created behind a timeout is reconciled, not charged.

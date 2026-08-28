@@ -98,9 +98,18 @@ export class Guard {
   /** Unsubscribes the state-change observer when a journey ends. */
   private unobserveState: (() => void) | undefined;
 
+  /**
+   * Provider order ids already recorded in this journey.
+   *
+   * Lets a repeated authorisation be reported as a reconciliation rather than a
+   * second creation.
+   */
+  private seenProviderOrderIds = new Set<string>();
+
   beginIntent(intent: BuyerIntent): void {
     this.intent = intent;
     this.financialActionTaken = false;
+    this.seenProviderOrderIds.clear();
     this.opts.audit.append({
       type: "intent.received",
       runId: intent.runId,
@@ -540,6 +549,21 @@ export class Guard {
     const provider = this.opts.paymentProvider;
     const isRazorpay = provider?.isReal === true && provider.name === "razorpay";
 
+    /**
+     * Was an order created, or an existing one returned?
+     *
+     * A correct integration reconciles a repeated idempotency key by returning the
+     * order it already made. The event said `payment.order_created` both times, so a
+     * duplicated delivery produced two creation entries for one order — and the
+     * journey that proves idempotency works was the one that looked like it had
+     * created two payable orders.
+     *
+     * Recorded rather than inferred, because "the same id appears twice" is exactly
+     * the ambiguity a reader should not have to resolve for themselves.
+     */
+    const reconciled = this.seenProviderOrderIds.has(attempt.providerOrderId);
+    this.seenProviderOrderIds.add(attempt.providerOrderId);
+
     this.audit(
       isRazorpay ? "razorpay.order_created" : "payment.order_created",
       {
@@ -547,13 +571,19 @@ export class Guard {
         quoteId: quote.id,
         providerOrderId: attempt.providerOrderId,
         decision: "allow",
-        reason: `Authorised ${formatMinor(attempt.amountMinor)} after ${
-          evaluation.evaluatedCount
-        } invariants passed`,
+        reason: reconciled
+          ? `Reconciled to existing order ${attempt.providerOrderId} — repeated ` +
+            `idempotency key, no second order created`
+          : `Authorised ${formatMinor(attempt.amountMinor)} after ${
+              evaluation.evaluatedCount
+            } invariants passed`,
         output: {
           payment_attempt_id: attempt.id,
           provider_order_id: attempt.providerOrderId,
           amount: toMajor(attempt.amountMinor),
+          // False means an order was created here; true means one already existed
+          // and was returned. The difference is whether money could move twice.
+          reconciled,
           // Recorded explicitly so no reader has to infer it.
           provider: provider?.name ?? "unknown",
           provider_is_real: provider?.isReal ?? false,
