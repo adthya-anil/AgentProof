@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { loadDotEnv } from "@/lib/core/env";
 import { describeEngine } from "@/lib/dashboard/data";
-import { getRunHistory } from "@/lib/dashboard/runStore";
+import { getRunHistoryWithStored } from "@/lib/dashboard/runStore";
 import { Tabs } from "../components";
 import PreflightConsole from "./PreflightConsole";
 
@@ -28,7 +28,9 @@ export default async function PreflightPage({
   // Accept either name: the rest of the dashboard links with `integration`.
   const variant = parseVariant(params.variant ?? params.integration);
   const engine = describeEngine();
-  const history = getRunHistory(8);
+  // Includes runs stored in Postgres, so the list survives a restart rather than
+  // only showing what this process happened to execute.
+  const history = await getRunHistoryWithStored(8);
 
   return (
     <>

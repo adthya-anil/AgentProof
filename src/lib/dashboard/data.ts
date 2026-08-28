@@ -60,8 +60,10 @@ export interface SuiteView {
  * triggered yet. Callers must render a "start a run" state for null rather than
  * quietly running one.
  */
-export function getSuiteView(variant: IntegrationVariant): SuiteView | null {
-  const stored = getLatestRun(variant);
+export async function getSuiteView(
+  variant: IntegrationVariant,
+): Promise<SuiteView | null> {
+  const stored = await getLatestRun(variant);
   return stored ? toView(stored) : null;
 }
 
@@ -86,11 +88,11 @@ function toView(stored: StoredRun): SuiteView {
   };
 }
 
-export function getJourney(
+export async function getJourney(
   variant: IntegrationVariant,
   scenarioId: string,
-): JourneyResult | null {
-  const view = getSuiteView(variant);
+): Promise<JourneyResult | null> {
+  const view = await getSuiteView(variant);
   return view?.suite.journeys.find((j) => j.scenarioId === scenarioId) ?? null;
 }
 
@@ -272,11 +274,11 @@ export interface EvaluationSummary {
  * Builds the evaluation summary from whatever has already been measured.
  * Returns null until both a mutation scoring and a fixed-integration run exist.
  */
-export function getEvaluationSummary(): EvaluationSummary | null {
+export async function getEvaluationSummary(): Promise<EvaluationSummary | null> {
   const scores = cachedScores;
   if (!scores || scores.length === 0) return null;
 
-  const fixed = getSuiteView("fixed");
+  const fixed = await getSuiteView("fixed");
   const detected = scores.filter((s) => s.detected).length;
   const total = scores.length;
 

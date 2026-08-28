@@ -256,3 +256,62 @@ export async function tableCounts(db: Db): Promise<DbCounts[]> {
   }
   return counts;
 }
+
+
+export interface StoredSuiteSnapshot {
+  id: string;
+  label: string;
+  integration_variant: string;
+  generator_model: string | null;
+  generator_is_real: boolean;
+  payment_adapter: string | null;
+  created_at: Date;
+  duration_ms: number;
+  /** Exact SuiteResult as produced, for faithful replay. */
+  result: unknown;
+}
+
+/**
+ * The most recent stored run for an integration variant.
+ *
+ * This is what lets a run outlive the process that produced it. Until now the
+ * dashboard read an in-memory cache, so restarting the server showed "no run yet"
+ * while the rows sat in Postgres — the one place the product delivered less than it
+ * claimed.
+ *
+ * Returns the snapshot rather than reassembling from the normalised tables, because
+ * those omit eight replay-only fields and a reconstruction would render a report
+ * subtly poorer than the one produced, with no way for a reader to tell which gaps
+ * were real.
+ */
+export async function latestSuiteFor(
+  db: Db,
+  variant: string,
+): Promise<StoredSuiteSnapshot | null> {
+  const rows = await db.query<StoredSuiteSnapshot>(
+    `select id, label, integration_variant, generator_model, generator_is_real,
+            payment_adapter, created_at, duration_ms, result
+       from suites
+      where integration_variant = $1 and result is not null
+      order by created_at desc
+      limit 1`,
+    [variant],
+  );
+  return rows[0] ?? null;
+}
+
+/** Recent stored runs across both variants, newest first. */
+export async function recentSuiteSnapshots(
+  db: Db,
+  limit = 10,
+): Promise<StoredSuiteSnapshot[]> {
+  return db.query<StoredSuiteSnapshot>(
+    `select id, label, integration_variant, generator_model, generator_is_real,
+            payment_adapter, created_at, duration_ms, result
+       from suites
+      where result is not null
+      order by created_at desc
+      limit $1`,
+    [limit],
+  );
+}

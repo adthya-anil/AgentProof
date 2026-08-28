@@ -21,7 +21,7 @@ export default async function AuditPage({
 }) {
   const params = await searchParams;
   const variant = parseVariant(params.integration);
-  const view = getSuiteView(variant);
+  const view = await getSuiteView(variant);
 
   if (!view) {
     return (

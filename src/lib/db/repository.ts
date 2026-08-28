@@ -54,8 +54,8 @@ export async function persistSuite(
          passed, safely_rejected, escalated, unsafe_violations, inconclusive,
          errored,
          money_critical_escapes, money_at_risk_minor, audit_chain_ok, readiness,
-         duration_ms, metrics
-       ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
+         duration_ms, metrics, result
+       ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
       [
         suiteId,
         suite.runId,
@@ -78,6 +78,10 @@ export async function persistSuite(
         suite.readiness,
         suite.durationMs,
         JSON.stringify(suite.metrics),
+        // Exact snapshot for replay. See the note in schema.sql: the normalised
+        // tables are for querying across runs, this is for reproducing one
+        // faithfully rather than approximately.
+        JSON.stringify(suite),
       ],
     );
 

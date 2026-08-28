@@ -203,15 +203,27 @@ export function Trace({ events }: { events: readonly AuditEvent[] }) {
   );
 }
 
+/**
+ * Event types whose payload adds nothing a reader needs.
+ *
+ * Deliberately a denylist. This was a whitelist of "interesting" types, which meant
+ * every event added later had its detail silently dropped — `catalog.state_changed`
+ * appeared with its reason but not the 599 → 649 that made it meaningful, and
+ * `run.completed` appeared without the verdict it exists to carry. A reader had no
+ * way to tell a payload that was empty from one that was withheld.
+ *
+ * Inverted, the default is to show the record. Anything hidden has to be argued for
+ * here, and a new event type cannot lose its detail by nobody remembering to add it.
+ */
+const PAYLOAD_NOT_WORTH_SHOWING = new Set<AuditEvent["type"]>([
+  // The arguments are already rendered from `input` on the request itself.
+  "agent.tool_requested",
+  // A bare acknowledgement; the interesting part is the policy verdict that follows.
+  "tool.executed",
+]);
+
 function renderPayload(event: AuditEvent) {
-  const interesting =
-    event.type === "quote.created" ||
-    event.type === "checkout.requested" ||
-    event.type === "checkout.blocked" ||
-    event.type === "razorpay.order_created" ||
-    event.type === "policy.evaluated" ||
-    event.type === "merchant_order.confirmed";
-  if (!interesting || !event.output) return null;
+  if (PAYLOAD_NOT_WORTH_SHOWING.has(event.type) || !event.output) return null;
   return <pre>{JSON.stringify(event.output, null, 2)}</pre>;
 }
 

@@ -15,7 +15,7 @@ export default async function ViolationsPage({
 }) {
   const params = await searchParams;
   const variant = parseVariant(params.integration);
-  const view = getSuiteView(variant);
+  const view = await getSuiteView(variant);
 
   if (!view) {
     return (

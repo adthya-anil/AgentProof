@@ -26,7 +26,7 @@ export default async function RunSummaryPage({
 }) {
   const params = await searchParams;
   const variant = parseVariant(params.integration);
-  const view = getSuiteView(variant);
+  const view = await getSuiteView(variant);
 
   if (!view) {
     return (
