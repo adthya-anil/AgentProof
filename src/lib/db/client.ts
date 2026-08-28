@@ -63,11 +63,52 @@ export class Db {
 
   /** True when the server answers. Used to decide whether to persist at all. */
   async isReachable(): Promise<boolean> {
+    return (await this.probe()).ok;
+  }
+
+  /**
+   * Reachability with a reason.
+   *
+   * `isReachable` alone produced a genuinely misleading message: a running server
+   * with no `agentproof` database reported "cannot reach — is the server
+   * running?", sending you to look at the one thing that was fine. Postgres says
+   * exactly what is wrong (`3D000`, invalid_catalog_name), so pass it on.
+   */
+  async probe(): Promise<{ ok: boolean; reason?: string; hint?: string }> {
     try {
       await this.query("select 1");
-      return true;
-    } catch {
-      return false;
+      return { ok: true };
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      const message = error instanceof Error ? error.message : String(error);
+
+      if (code === "3D000") {
+        return {
+          ok: false,
+          reason: message,
+          hint:
+            "The server is running but that database does not exist. Create it " +
+            "first — in pgAdmin: right-click Databases → Create → Database, " +
+            'name it "agentproof". Or: createdb -U postgres agentproof',
+        };
+      }
+      if (code === "28P01" || code === "28000") {
+        return {
+          ok: false,
+          reason: message,
+          hint: "The user or password in DATABASE_URL was rejected by the server.",
+        };
+      }
+      if (code === "ECONNREFUSED" || code === "EHOSTUNREACH") {
+        return {
+          ok: false,
+          reason: message,
+          hint:
+            "Nothing is listening there. Check the host and port, and that " +
+            "PostgreSQL is actually started.",
+        };
+      }
+      return { ok: false, reason: message };
     }
   }
 

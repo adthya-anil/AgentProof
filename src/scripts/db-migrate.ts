@@ -26,9 +26,11 @@ async function main(): Promise<void> {
   console.log(`Migrating ${config.describe}`);
   const db = new Db(config);
   try {
-    if (!(await db.isReachable())) {
-      console.error(`\n✗ Cannot reach ${config.describe}`);
-      console.error("  Is the server running? Try: npm run db:up");
+    const probe = await db.probe();
+    if (!probe.ok) {
+      console.error(`\n✗ ${config.describe}`);
+      if (probe.reason) console.error(`  ${probe.reason}`);
+      console.error(`  ${probe.hint ?? "Is the server running?"}`);
       process.exit(1);
     }
     await migrate(db);
