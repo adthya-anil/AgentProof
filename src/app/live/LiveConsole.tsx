@@ -1,6 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type ScopedRecheck,
+  shouldWatchPayment,
+  visibleRecheck,
+} from "@/lib/live/scopedRecheck";
 import type { RecheckResult } from "@/lib/live/session";
 import type {
   LiveEvent,
@@ -108,8 +113,14 @@ export default function LiveConsole({
   const [error, setError] = useState<string | null>(null);
   const [rechecking, setRechecking] = useState(false);
   const [watching, setWatching] = useState(false);
-  const [recheckResult, setRecheckResult] = useState<RecheckResult | null>(null);
+  /**
+   * Paired with its session id, so a previous run's success cannot render against
+   * a new order. See `scopedRecheck.ts`.
+   */
+  const [storedRecheck, setStoredRecheck] = useState<ScopedRecheck | null>(null);
   const [recheckError, setRecheckError] = useState<string | null>(null);
+
+  const recheckResult = visibleRecheck(storedRecheck, hosted?.sessionId);
   const sourceRef = useRef<EventSource | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -126,6 +137,9 @@ export default function LiveConsole({
     setHosted(null);
     setError(null);
     setSession(null);
+    setStoredRecheck(null);
+    setRecheckError(null);
+    setWatching(false);
     setRunning(true);
 
     const p = PRESETS[preset]!;
@@ -210,7 +224,7 @@ export default function LiveConsole({
       // than appending an identical "still not captured" row every few seconds.
       if (silent && !body.verified && !body.fulfilled) return;
 
-      setRecheckResult(body);
+      setStoredRecheck({ sessionId: hosted.sessionId, result: body });
       // Reuse the same renderer as the live stream, so a verification looks like
       // the journey step it is rather than a separate status widget.
       const appended = (body.events ?? [])
@@ -239,7 +253,7 @@ export default function LiveConsole({
    */
   useEffect(() => {
     if (!hosted?.sessionId) return;
-    if (recheckResult?.fulfilled || recheckResult?.verified) return;
+    if (!shouldWatchPayment(storedRecheck, hosted.sessionId)) return;
 
     let attempts = 0;
     setWatching(true);
@@ -258,7 +272,7 @@ export default function LiveConsole({
       setWatching(false);
       clearInterval(timer);
     };
-  }, [hosted, recheckResult, recheck]);
+  }, [hosted, storedRecheck, recheck]);
 
   const stop = useCallback(() => {
     sourceRef.current?.close();
