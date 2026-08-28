@@ -33,6 +33,16 @@ export interface StoredRun {
   /** Model that generated the scenarios and drove the agents. */
   model: string;
   modelIsReal: boolean;
+  /**
+   * Set when one model was given the adversary role instead of shopping.
+   *
+   * Carried so a stored report can describe its own methodology. Without it the
+   * by-model table on the run summary had to guess, and it guessed wrong — it claimed
+   * every goal had been attempted by every model, which is only true of a comparison
+   * run. In a split run the models do different jobs and the table is a breakdown by
+   * role, not a comparison.
+   */
+  adversaryModel?: string | null;
   paymentAdapter: string;
   regressionCount: number;
   perturbationCount: number;
@@ -212,6 +222,8 @@ export interface RecordRunInput {
   startedAt: number;
   model: string;
   modelIsReal: boolean;
+  /** The model given the adversary role, when roles were split. */
+  adversaryModel?: string | null;
   paymentAdapter: string;
   regressionCount: number;
   perturbationCount: number;
@@ -235,6 +247,7 @@ export async function recordRun(input: RecordRunInput): Promise<StoredRun> {
     finishedAt: new Date().toISOString(),
     model: input.model,
     modelIsReal: input.modelIsReal,
+    adversaryModel: input.adversaryModel ?? null,
     paymentAdapter: input.paymentAdapter,
     regressionCount: input.regressionCount,
     perturbationCount: input.perturbationCount,

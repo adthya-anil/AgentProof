@@ -532,12 +532,37 @@ export default function PreflightConsole({
 
           {summary.byModel.length > 1 && (
             <>
-              <h2 style={{ marginTop: "1.5rem" }}>Where the models differ</h2>
+              <h2 style={{ marginTop: "1.5rem" }}>
+                {meta?.adversaryModel ? "What each model did" : "Where the models differ"}
+              </h2>
+              {/*
+                Conditional, because the unconditional version was false.
+                With roles split — the default — each goal goes to exactly one model
+                and the adversary drives only what it generated. The old text claimed
+                every goal was attempted by every model and invited the reader to read
+                disagreement as signal, on two rows covering disjoint scenario sets.
+                In this run that read as "the adversary had 0 unsafe violations", which
+                is true, meaningless, and flattering to the wrong thing.
+              */}
               <p className="note" style={{ marginTop: 0 }}>
-                Every live goal was attempted by each model. Rows that disagree are
-                the interesting ones: they show how much the integration is
-                relying on the agent&apos;s own judgement rather than on its own
-                checks.
+                {meta?.adversaryModel ? (
+                  <>
+                    <span className="mono">{meta?.adversaryModel}</span> was given the
+                    adversary role and wrote the goals, so it only drove the journeys
+                    it invented; every other live goal went to the buyer. The models
+                    did different jobs on different scenarios, so this is a breakdown
+                    by role — <strong>not</strong> a comparison. A row with fewer
+                    unsafe violations is not a safer agent, it is a smaller and
+                    different set of journeys. Use the Compare preset to send every
+                    model at the same goals.
+                  </>
+                ) : (
+                  <>
+                    Every live goal was attempted by each model. Rows that disagree are
+                    the interesting ones: they show how much the integration is relying
+                    on the agent&apos;s own judgement rather than on its own checks.
+                  </>
+                )}
               </p>
               <table>
                 <thead>

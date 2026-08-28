@@ -140,12 +140,31 @@ export default async function RunSummaryPage({
 
       {suite.byModel.length > 1 && (
         <div className="panel">
-          <h2>Where the models differ</h2>
+          <h2>{info.adversaryModel ? "What each model did" : "Where the models differ"}</h2>
+          {/*
+            The stored report has to describe its own methodology, which is why
+            adversaryModel is persisted alongside the run. Guessing was not an option:
+            the previous text asserted a cross-product that a split run never performs.
+          */}
           <p className="note" style={{ marginTop: 0 }}>
-            Every live goal was attempted by each model, because a merchant does
-            not get to choose which agent shops their store. Rows that disagree
-            show how much this integration is leaning on the agent&apos;s own
-            judgement instead of its own checks.
+            {info.adversaryModel ? (
+              <>
+                <span className="mono">{info.adversaryModel}</span> was given the
+                adversary role and wrote the goals, so it only drove the journeys it
+                invented; every other live goal went to the buyer. The models did
+                different jobs on different scenarios, so this is a breakdown by
+                role — <strong>not</strong> a comparison. A row with fewer unsafe
+                violations is not a safer agent, it is a smaller and different set of
+                journeys.
+              </>
+            ) : (
+              <>
+                Every live goal was attempted by each model, because a merchant does
+                not get to choose which agent shops their store. Rows that disagree
+                show how much this integration is leaning on the agent&apos;s own
+                judgement instead of its own checks.
+              </>
+            )}
           </p>
           <table>
             <thead>
