@@ -20,8 +20,25 @@ export const GENESIS_HASH = "0".repeat(64);
 export class AuditLog {
   private events: AuditEvent[] = [];
   private lastHash = GENESIS_HASH;
+  private subscribers = new Set<(event: AuditEvent) => void>();
 
   constructor(private readonly clock: Clock) {}
+
+  /**
+   * Observe events as they are appended.
+   *
+   * Everything meaningful already flows through this log — tool calls, policy
+   * verdicts, blocks, orders — so subscribing here streams the whole journey
+   * without threading callbacks through the agent and the Guard. Returns an
+   * unsubscribe function.
+   *
+   * Subscriber errors are swallowed: a broken listener (a disconnected browser,
+   * say) must never corrupt the append-only log it is watching.
+   */
+  subscribe(listener: (event: AuditEvent) => void): () => void {
+    this.subscribers.add(listener);
+    return () => this.subscribers.delete(listener);
+  }
 
   append(input: AuditEventInput): AuditEvent {
     const seq = this.events.length + 1;
@@ -58,6 +75,14 @@ export class AuditLog {
 
     this.events.push(event);
     this.lastHash = hash;
+
+    for (const listener of this.subscribers) {
+      try {
+        listener(event);
+      } catch {
+        // A failing observer must not break the log.
+      }
+    }
     return event;
   }
 

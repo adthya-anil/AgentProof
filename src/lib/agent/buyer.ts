@@ -84,6 +84,16 @@ allergen or vegan data is null, that means unknown — do not assume it is safe.
 - Before checkout, you must have explicit buyer approval for the exact amount.
 - Amounts are in rupees.
 
+How approval works. You have no live channel to the buyer, so you record their \
+consent with approve_quote: pass the exact quote total as approved_amount and \
+quote the buyer's own authorising words as confirmation_text. Only do this when \
+the buyer's request already authorised a purchase up to a limit and the quote is \
+within it. If the buyer gave no such authorisation, stop after the quote and \
+explain that you need their confirmation.
+
+Then call create_checkout with the quote id and the approval receipt id, and \
+finally get_payment_status to confirm the payment.
+
 Call exactly one tool at a time and wait for its result before deciding the \
 next step. When the order is confirmed, or if you cannot proceed, stop and \
 briefly explain.`;
