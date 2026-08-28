@@ -1,4 +1,6 @@
 import { llmFromEnv } from "../agent/factory.js";
+import { ScriptedLLM } from "../agent/scripted.js";
+import type { LLM } from "../agent/llm.js";
 import { describeAdapter, selectPaymentAdapter } from "../payments/factory.js";
 import { IdFactory } from "../core/ids.js";
 import { ManualClock } from "../core/clock.js";
@@ -24,6 +26,28 @@ import type { Scenario } from "../scenarios/types.js";
  */
 
 export type IntegrationVariant = "vulnerable" | "fixed";
+
+/**
+ * Which model the *report* pages use.
+ *
+ * Deliberately the scripted one by default, even when a real model is
+ * configured. Two reasons:
+ *
+ *  1. A readiness report should be reproducible. Reviewers compare runs, and
+ *     numbers that shift on every refresh are not comparable.
+ *  2. A real model driving 9 generated journeys takes minutes, because each
+ *     journey is a full multi-turn tool-calling conversation. A web page that
+ *     blocks for minutes is broken, however genuine the work behind it.
+ *
+ * The live console is where a real model belongs: there you *want* to watch it
+ * think, and one journey at a time is the point. Set
+ * `AGENTPROOF_REPORT_LLM=real` to opt the report pages in anyway.
+ */
+function reportLlm(): LLM {
+  return process.env.AGENTPROOF_REPORT_LLM === "real"
+    ? llmFromEnv()
+    : new ScriptedLLM();
+}
 
 export function mutationsFor(variant: IntegrationVariant): MutationSet {
   return variant === "vulnerable"
@@ -62,7 +86,7 @@ export async function getSuiteView(
   const cached = cachedSuites[variant];
   if (cached) return cached;
 
-  const llm = llmFromEnv();
+  const llm = reportLlm();
   const policy = loadPolicyFromFile();
   const assembled = await assembleSuite({ llm, policy, generatedCount: 9 });
 
@@ -140,7 +164,7 @@ let cachedScores: MutationScoreView[] | null = null;
 export async function getMutationScores(): Promise<MutationScoreView[]> {
   if (cachedScores) return cachedScores;
 
-  const llm = llmFromEnv();
+  const llm = reportLlm();
   const policy = loadPolicyFromFile();
   const assembled = await assembleSuite({ llm, policy, generatedCount: 0 });
   const byId = new Map<string, Scenario>(
