@@ -12,7 +12,10 @@ import {
   PERTURBATION_SCENARIOS,
   perturbationScenarios,
 } from "../src/lib/scenarios/perturbations.js";
-import { REGRESSION_SCENARIOS } from "../src/lib/scenarios/regression.js";
+import {
+  AGENT_UNREACHABLE_GOALS,
+  REGRESSION_SCENARIOS,
+} from "../src/lib/scenarios/regression.js";
 
 /**
  * Guards the claims the product makes about its own numbers.
@@ -100,14 +103,58 @@ describe("who drove the journey", () => {
 
   it("keeps the same buyer goal and target invariant as the fixed original", () => {
     const live = agentDrivenScenarios({ llm: new ScriptedLLM() });
-    expect(live).toHaveLength(REGRESSION_SCENARIOS.length);
+    const reachable = REGRESSION_SCENARIOS.filter(
+      (s) => !(s.id in AGENT_UNREACHABLE_GOALS),
+    );
+    expect(live).toHaveLength(reachable.length);
+
     for (const [index, scenario] of live.entries()) {
-      const original = REGRESSION_SCENARIOS[index]!;
+      const original = reachable[index]!;
       expect(scenario.intent).toEqual(original.intent);
       expect(scenario.targetsInvariant).toBe(original.targetsInvariant);
       // Distinct id, so the two never overwrite each other in a report.
       expect(scenario.id).not.toBe(original.id);
     }
+  });
+
+  /**
+   * A twin must inherit the *mechanism*, not just the label.
+   *
+   * `live-price-changed` previously carried `INV-PRICE-BINDING` while the price
+   * change lived inside the scripted body it replaced — so it was an ordinary
+   * purchase that reported a clean pass against an invariant it never exercised.
+   * Six of sixteen live journeys in a real run were meaningless this way.
+   */
+  it("carries the interference that makes the target invariant reachable", () => {
+    const live = agentDrivenScenarios({ llm: new ScriptedLLM() });
+
+    for (const original of REGRESSION_SCENARIOS) {
+      if (!original.interference && !original.faults) continue;
+      if (original.id in AGENT_UNREACHABLE_GOALS) continue;
+
+      const twin = live.find((s) => s.intent === original.intent);
+      expect(twin, `no twin for ${original.id}`).toBeDefined();
+      if (original.interference) {
+        expect(twin!.interference, `${original.id} lost its interference`).toBe(
+          original.interference,
+        );
+      }
+      if (original.faults) {
+        expect(twin!.faults, `${original.id} lost its faults`).toBe(
+          original.faults,
+        );
+      }
+    }
+  });
+
+  it("does not invent a twin for a goal an agent cannot reproduce", () => {
+    const live = agentDrivenScenarios({ llm: new ScriptedLLM() });
+    // reg-11 drives INV-PAYMENT-STATE through a merchant-side fulfilment call
+    // that is deliberately not one of the agent's six tools.
+    expect(Object.keys(AGENT_UNREACHABLE_GOALS)).toContain(
+      "reg-11-payment-not-captured",
+    );
+    expect(live.some((s) => s.id.includes("payment-not-captured"))).toBe(false);
   });
 });
 
@@ -391,7 +438,10 @@ describe("suite composition", () => {
       generatedCount: 0,
       mode: "both",
     });
-    expect(suite.liveCount).toBe(REGRESSION_SCENARIOS.length);
+    // Every goal except those an agent provably cannot reproduce.
+    expect(suite.liveCount).toBe(
+      REGRESSION_SCENARIOS.length - Object.keys(AGENT_UNREACHABLE_GOALS).length,
+    );
     expect(suite.regressionCount).toBe(REGRESSION_SCENARIOS.length);
   });
 

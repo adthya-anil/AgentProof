@@ -6,6 +6,7 @@ import type { MutationSet } from "../hamperhub/mutations.js";
 import { type Violation, integrationDefects } from "../policy/violations.js";
 import { type SuiteMetrics, computeSuiteMetrics } from "../report/metrics.js";
 import type { Scenario } from "../scenarios/types.js";
+import { InterferingToolCaller } from "./interference.js";
 import { type PerturbationEvent, PerturbingToolCaller } from "./perturbation.js";
 
 export type JourneyDisposition =
@@ -228,12 +229,22 @@ export async function runScenario(
     ? new PerturbingToolCaller(env.guard, scenario.perturbation, env.clock)
     : null;
 
+  // Interference sits outside the perturber: the world changes around whatever
+  // the transport did, not instead of it.
+  const interferer = scenario.interference
+    ? new InterferingToolCaller(
+        perturber ?? env.guard,
+        scenario.interference,
+        env,
+      )
+    : null;
+
   try {
     const outcome = await scenario.execute({
       env,
       guard: env.guard,
       intent,
-      tools: perturber ?? env.guard,
+      tools: interferer ?? perturber ?? env.guard,
     });
 
     const violations = [...env.guard.recordedViolations()];
@@ -298,6 +309,17 @@ export async function runScenario(
     const perturbationMissed =
       scenario.perturbation !== undefined &&
       (perturber?.applied().length ?? 0) === 0;
+
+    /**
+     * Interference that never fired, for the same reason and with the same verdict.
+     *
+     * An agent that never reached `approve_quote` never had the price changed under
+     * it, so the journey says nothing about `INV-PRICE-BINDING`. Calling that a
+     * pass is how `live-price-changed` came to report a clean result while testing
+     * an ordinary purchase.
+     */
+    const interferenceMissed =
+      scenario.interference !== undefined && interferer?.applied() !== true;
     const disposition: JourneyDisposition = selfRejected
       ? "safely_rejected"
       : defects.length > 0
@@ -308,7 +330,7 @@ export async function runScenario(
             ? "escalated"
             : // An agent that ran out of tool budget proved nothing. So did a
             // perturbation journey where the fault never got a chance to fire.
-              outcome.inconclusive || perturbationMissed
+              outcome.inconclusive || perturbationMissed || interferenceMissed
               ? "inconclusive"
               : "safely_rejected";
 
@@ -368,7 +390,11 @@ export async function runScenario(
       note: perturbationMissed
         ? `${outcome.note} — perturbation never fired: the agent did not reach ` +
           "the tool the fault targets, so this journey did not exercise it"
-        : outcome.note,
+        : interferenceMissed
+          ? `${outcome.note} — "${scenario.interference!.label}" never happened: ` +
+            `the agent did not complete ${scenario.interference!.afterTool}, so ` +
+            "this journey did not exercise its target invariant"
+          : outcome.note,
       violations,
       escalations,
       integrationDefects: defects,
