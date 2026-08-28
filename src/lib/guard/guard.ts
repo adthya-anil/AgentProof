@@ -238,7 +238,7 @@ export class Guard {
         case "create_bundle":
           return this.handleCreateBundle(parsed.data as BundleArgs);
         case "create_quote":
-          return this.handleCreateQuote(parsed.data as QuoteArgs);
+          return await this.handleCreateQuote(parsed.data as QuoteArgs);
         case "approve_quote":
           return this.handleApproveQuote(parsed.data as ApproveArgs);
         case "create_checkout":
@@ -321,8 +321,8 @@ export class Guard {
    * buyer. Blocking here is what stops an over-discounted price being offered in
    * the first place, rather than catching it at payment.
    */
-  private handleCreateQuote(args: QuoteArgs): ToolResult {
-    const { quote, rejectedPromos } = this.opts.service.createQuote({
+  private async handleCreateQuote(args: QuoteArgs): Promise<ToolResult> {
+    const { quote, rejectedPromos } = await this.opts.service.createQuote({
       intentId: this.intent.id,
       bundleId: args.bundle_id,
     });

@@ -68,6 +68,17 @@ export default async function PreflightPage({
             <span>Policy</span>
             <code>{engine.policyVersion}</code>
           </div>
+          {/*
+            Which concurrency guarantee is in force, stated rather than assumed.
+            In-process locking is real for one process and worth nothing for two, and
+            a panel that said nothing would let a reader assume the stronger claim.
+          */}
+          <div>
+            <span>Concurrency</span>
+            {engine.concurrency.crossProcess
+              ? `${engine.concurrency.locks} locks — holds across processes`
+              : `${engine.concurrency.locks} locks — single process only`}
+          </div>
         </div>
 
         {engine.pool.length === 0 ? (

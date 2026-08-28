@@ -1,7 +1,9 @@
 import { AuditLog } from "./audit/log.js";
 import { type Clock, ManualClock } from "./core/clock.js";
 import { IdFactory } from "./core/ids.js";
+import { type LockManager } from "./core/lock.js";
 import { type Minor, rupees } from "./core/money.js";
+import type { PayableOrderRegistry } from "./core/payableOrder.js";
 import type { BuyerIntent } from "./core/types.js";
 import { Guard } from "./guard/guard.js";
 import { MutationSet } from "./hamperhub/mutations.js";
@@ -38,6 +40,18 @@ export interface EnvironmentOptions {
   /** Pass a real provider to run against Razorpay test mode. */
   paymentProvider?: PaymentProvider;
   mode?: "preflight" | "runtime";
+  /**
+   * Cross-process mutual exclusion and payable-order uniqueness.
+   *
+   * Both optional and both defaulted in-process by the service. Passing the Postgres
+   * implementations is what makes the guarantees hold across processes; leaving them
+   * out keeps a single-process run correct and database-free, which every offline demo
+   * and most of the test suite relies on.
+   */
+  locks?: LockManager;
+  payableOrders?: PayableOrderRegistry;
+  /** Namespace for payable-order claims. One logical deployment per scope. */
+  claimScope?: string;
 }
 
 /**
@@ -81,6 +95,9 @@ export function createEnvironment(opts: EnvironmentOptions = {}): Environment {
     policyVersion: version,
     mutations,
     payments,
+    locks: opts.locks,
+    payableOrders: opts.payableOrders,
+    claimScope: opts.claimScope,
   });
 
   const guard = new Guard({

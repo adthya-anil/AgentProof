@@ -332,3 +332,62 @@ CREATE INDEX IF NOT EXISTS test_runs_model_idx ON test_runs (model);
 -- with fields nobody would ever filter on, and would still drift the moment
 -- JourneyResult gained a field.
 ALTER TABLE suites ADD COLUMN IF NOT EXISTS result JSONB;
+
+
+-- ---------------------------------------------------------------------------
+-- Money-critical uniqueness
+-- ---------------------------------------------------------------------------
+--
+-- One payable order per buyer intent, enforced by the database rather than checked by
+-- the application.
+--
+-- INV-IDEMPOTENCY already detects a second payable order, and detection is the wrong
+-- guarantee for money: it means the second order existed long enough to be noticed. A
+-- unique index means the second INSERT fails. Two processes racing cannot both win,
+-- whatever either believes about the other, and no amount of lock-management bugs can
+-- widen the window because there is no window.
+--
+-- Partial, because a blocked or failed checkout intent is not payable and several of
+-- those per intent are entirely normal — a run that gets blocked at checkout, has its
+-- quote re-priced, and tries again produces exactly that.
+--
+-- The invariant stays. It now reports on a rule the storage layer already enforces,
+-- which is the right relationship between the two: the constraint prevents, the
+-- invariant explains.
+CREATE UNIQUE INDEX IF NOT EXISTS one_payable_order_per_intent
+    ON checkout_intents (test_run_id, intent_id)
+ WHERE status IN ('authorized', 'fulfilled');
+
+-- Scoped by test_run_id, and that scoping is not incidental. Intent ids come from a
+-- seeded IdFactory, so a preflight that persists a vulnerable suite and then a fixed
+-- one can mint the same intent id in both. An index on intent_id alone would reject the
+-- second, legitimate run — and because both persistSuite call sites swallow their
+-- errors, the whole suite would roll back in silence. Correct-looking constraint,
+-- invisible data loss.
+--
+-- Note what this index does and does not do. checkout_intents is written when a run
+-- finishes, so a constraint here audits recorded evidence; it cannot prevent a charge
+-- that already happened. Prevention lives in payable_order_claims below, which is
+-- written on the authorization path itself.
+
+
+-- ---------------------------------------------------------------------------
+-- Live payable-order claims
+-- ---------------------------------------------------------------------------
+--
+-- The claim that actually stops a double charge, taken before the provider order is
+-- created rather than recorded after.
+--
+-- The merchant's own defence is an in-memory scan of its payment map, which is correct
+-- for exactly one process; a second process has its own map, sees nothing, and both
+-- create an order. Whoever inserts here owns the sole payable order for that intent,
+-- and everyone else is told who owns it. Two processes racing cannot both win.
+--
+-- Not scoped to a test run, because the point is to be visible to processes that share
+-- nothing but this database. Scoped instead by a deployment nonce inside claim_key,
+-- so independent runs cannot collide while a single deployment stays global.
+CREATE TABLE IF NOT EXISTS payable_order_claims (
+  claim_key   TEXT PRIMARY KEY,
+  owner_id    TEXT NOT NULL,
+  claimed_at  TIMESTAMPTZ NOT NULL
+);

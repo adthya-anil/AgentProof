@@ -1,4 +1,14 @@
 import type { Clock } from "../core/clock.js";
+import {
+  InProcessLockManager,
+  type LockManager,
+  stockKeys,
+} from "../core/lock.js";
+import {
+  InProcessPayableOrderRegistry,
+  payableOrderKey,
+  type PayableOrderRegistry,
+} from "../core/payableOrder.js";
 import { minutesFrom } from "../core/clock.js";
 import { type IdFactory, randomId, stableHash } from "../core/ids.js";
 import { type Minor, formatMinor } from "../core/money.js";
@@ -43,6 +53,7 @@ export type CommerceErrorCode =
   | "confirmation_required"
   | "payment_not_captured"
   | "duplicate_authorization"
+  | "duplicate_payable_order"
   | "amount_above_ceiling"
   | "empty_bundle";
 
@@ -98,8 +109,38 @@ export class HamperHubService {
       policyVersion: string;
       mutations: MutationSet;
       payments: PaymentProvider;
+      /**
+       * Mutual exclusion for check-and-hold.
+       *
+       * Optional, defaulting to in-process, so a single-process run stays correct
+       * without a database and nothing already constructing a service has to change.
+       * A deployment with more than one process passes the Postgres advisory manager.
+       */
+      locks?: LockManager;
+      /**
+       * Uniqueness for payable orders. Defaults to in-process.
+       *
+       * A deployment with more than one process passes the Postgres registry, which is
+       * the only version that can refuse a duplicate raised by a different process.
+       */
+      payableOrders?: PayableOrderRegistry;
+      /**
+       * Namespace for payable-order claims — one logical deployment.
+       *
+       * Defaults to a per-instance nonce so two suites in one preflight cannot collide
+       * on seeded intent ids.
+       */
+      claimScope?: string;
     },
-  ) {}
+  ) {
+    this.locks = deps.locks ?? new InProcessLockManager();
+    this.payableOrders = deps.payableOrders ?? new InProcessPayableOrderRegistry();
+    this.claimScope = deps.claimScope ?? randomId("scope");
+  }
+
+  private readonly locks: LockManager;
+  private readonly payableOrders: PayableOrderRegistry;
+  private readonly claimScope: string;
 
   // -- tool: search_products ----------------------------------------------
 
@@ -184,10 +225,10 @@ export class HamperHubService {
 
   // -- tool: create_quote --------------------------------------------------
 
-  createQuote(input: { intentId: string; bundleId: string }): {
+  async createQuote(input: { intentId: string; bundleId: string }): Promise<{
     quote: Quote;
     rejectedPromos: Array<{ code: string; reason: string }>;
-  } {
+  }> {
     const bundle = this.bundles.get(input.bundleId);
     if (!bundle) {
       throw new CommerceError("unknown_bundle", `No such bundle: ${input.bundleId}`);
@@ -268,10 +309,25 @@ export class HamperHubService {
     }
 
     if (this.deps.policy.inventory.reserveBeforeCheckout) {
-      const reservation = this.deps.state.reserve(
-        quote.id,
-        bundle.items,
-        this.deps.policy.inventory.reservationMinutes,
+      /**
+       * The whole check-and-hold is inside the lock, not just the decrement.
+       *
+       * Locking only the write would leave the read outside it, which is the race
+       * itself: two callers both see three units free, both decrement, and stock goes
+       * negative. Measured on a model of this exact code with one await inserted
+       * between the two halves — five buyers, three units, five reservations granted.
+       *
+       * Keyed per product, so buyers competing for coffee do not serialise behind
+       * buyers competing for mugs.
+       */
+      const reservation = await this.locks.withLocks(
+        stockKeys(bundle.items),
+        async () =>
+          this.deps.state.reserve(
+            quote.id,
+            bundle.items,
+            this.deps.policy.inventory.reservationMinutes,
+          ),
       );
       if (!reservation) {
         throw new CommerceError(
@@ -513,6 +569,33 @@ export class HamperHubService {
       );
     }
 
+    /**
+     * Claim the sole payable order for this intent before creating it.
+     *
+     * The retry-reconciliation check above is an in-memory scan, correct for one
+     * process and blind to every other. This claim is not: with the Postgres registry
+     * it is a unique row, so a second process attempting the same intent is refused by
+     * the database rather than by a check it never ran.
+     *
+     * Gated on the same defect flag as the rest of the idempotency handling. A
+     * vulnerable integration must stay vulnerable — protecting it with the Guard's own
+     * infrastructure would quietly delete the defect the suite exists to find, and the
+     * 8/8 recall would become 7/8 for the wrong reason.
+     */
+    const claimKey = payableOrderKey(this.claimScope, checkout.intentId);
+    const claiming = !this.deps.mutations.has("missing_idempotency");
+    if (claiming) {
+      const claim = await this.payableOrders.claim(claimKey, checkout.id);
+      if (!claim.ok) {
+        throw new CommerceError(
+          "duplicate_payable_order",
+          `Intent ${checkout.intentId} already has a payable order owned by ` +
+            `checkout ${claim.owner}. Reconcile with the provider instead of ` +
+            `creating a second one.`,
+        );
+      }
+    }
+
     try {
       const order = await this.deps.payments.createOrder({
         amountMinor: checkout.amountMinor,
@@ -544,10 +627,14 @@ export class HamperHubService {
       return { ...attempt };
     } catch (error) {
       if (error instanceof PaymentProviderError && error.kind === "timeout") {
-        // Deliberately leave the intent payable. The provider may well have
-        // created the order; pretending otherwise is how double charges happen.
+        // Deliberately leave the intent payable, and deliberately keep the claim. The
+        // provider may well have created the order; releasing the claim here would let
+        // a retry open a second one, which is exactly the double charge.
         throw error;
       }
+      // A definite failure, so give the claim back — otherwise a legitimate retry
+      // after a declined card is refused forever.
+      if (claiming) await this.payableOrders.release(claimKey, checkout.id);
       checkout.status = "failed";
       throw error;
     }
@@ -657,6 +744,27 @@ export class HamperHubService {
       quote.status = "consumed";
     }
     return order;
+  }
+
+  /**
+   * Every quote and receipt raised in this environment.
+   *
+   * Only per-id getters existed, which is enough for the Guard — it always knows the id
+   * it is asking about. Persistence does not: it has to write what happened without
+   * being told what to look for, including quotes that were blocked before checkout and
+   * so are referenced by no checkout intent at all.
+   */
+  listQuotes(): Quote[] {
+    return [...this.quotes.values()].map((q) => ({ ...q }));
+  }
+
+  listApprovalReceipts(): ApprovalReceipt[] {
+    return [...this.approvals.values()].map((a) => ({ ...a }));
+  }
+
+  /** Which uniqueness and locking implementations this instance is actually using. */
+  concurrencyBackends(): { locks: string; payableOrders: string } {
+    return { locks: this.locks.name, payableOrders: this.payableOrders.name };
   }
 
   // -- state used by the Guard --------------------------------------------

@@ -28,7 +28,7 @@ an API key or network access unless you explicitly opt in.
 
 ```bash
 npm install
-npm test                    # 356 tests
+npm test                    # 388 tests (2 need DATABASE_URL)
 npm run typecheck
 
 npm run demo:happy          # successful ₹1,399 transaction
@@ -580,10 +580,27 @@ reservation races are never exercised. Here they are. Losing buyers being turned
 away is the correct outcome; the test also fails if *nobody* succeeds, since a
 Guard that blocks everyone trivially never oversells and would be useless.
 
-**What this does not prove.** Reservation check-and-hold is synchronous within a
-single Node process, so no interleaving can split it. Running two AgentProof
-processes against one shared store would need a row lock or a unique constraint to
-hold the same guarantee.
+**What this proves, and how far.** Reservation check-and-hold no longer relies on
+being synchronous. It is wrapped in a lock keyed per product, and
+`tests/locks.test.ts` demonstrates why that is necessary rather than defensive: the
+same check-and-hold with one `await` inserted between the halves grants all five
+buyers three units, overselling by two. The lock closes it; a control test locking a
+*different* key oversells again, so the pass is the lock and not an absence of
+contention.
+
+Across processes, `tests/multi-process.test.ts` forks four real `node` children at
+one database. Exactly one wins the payable-order claim. The control — the same four
+children doing check-then-act against a table with no unique key, which is what an
+in-memory scan amounts to once there is more than one process — produced three
+winners, i.e. two duplicate orders. Those two tests skip without `DATABASE_URL`
+rather than passing vacuously.
+
+**What it still does not prove.** The oversell half is demonstrated across `await`
+but not yet across processes: `pg_advisory_xact_lock` is wired and unit-tested
+against a fake, and the four-process test covers the payable-order claim rather
+than a stock reservation. Two AgentProof processes competing for the last unit of
+coffee is the case still argued rather than measured. The demo above also remains
+single-process, so it exercises the lock without needing a database.
 
 ---
 
@@ -620,7 +637,7 @@ Persisted hash chains: 50 checked
   ✓ all verify
 ```
 
-Seventeen tables covering the spec's entities. Money is `BIGINT` paise. A whole
+Eighteen tables covering the spec's entities. Money is `BIGINT` paise. A whole
 suite is written in one transaction, because a half-written suite is worse than
 none — a reader could not tell a missing violation from a passing journey.
 
@@ -865,7 +882,7 @@ src/app/api/preflight/          Suite runner as a server-sent event stream
 src/app/                        Next.js dashboard (server components elsewhere)
 src/scripts/                    Runnable demos and database tooling
 scripts/dev-db.sh               Local Postgres for development
-tests/                          356 tests
+tests/                          388 tests
 ```
 
 Money is an integer count of paise throughout. Float rupees are banned: an
@@ -898,12 +915,47 @@ Honest scope. What is built is listed above; these are the real gaps:
   choice changes what an agent does to your checkout. It does not establish which
   model is "safer" — that would need many runs per model, since a single live
   journey is one sample from a distribution.
-- **Concurrency is single-process.** Interleaved journeys are exercised and cannot
-  oversell, but reservation check-and-hold is synchronous within one Node process.
-  A multi-process deployment would need a row lock or unique constraint.
+- **Cross-process safety is opt-in, and silent about itself if you forget.**
+  Check-and-hold is lock-guarded and payable orders are claimed through a unique
+  row, but both default to in-process implementations so that an offline demo needs
+  no database. Only a run with `DATABASE_URL` set gets the Postgres advisory lock
+  and the shared claim table; without it the guarantee is exactly the
+  single-process one it always was. The preflight Engine panel names which is in
+  force, because the two are indistinguishable from the outside until they are not.
 - **One merchant, one policy.** HamperHub is the only integration under test, so
   the Guard's independence from a specific commerce backend is a design property
   rather than a demonstrated one.
+- **A unique row, not a lock, for double charges.** A lock narrows the window; a
+  constraint removes it. `payable_order_claims` is written on the authorization
+  path with `insert ... on conflict do nothing returning`, so whoever inserts owns
+  the sole payable order and every other caller is told which checkout owns it. The
+  atomicity is the database's, not the application's — there is no window between
+  checking and claiming because there is no check. INV-IDEMPOTENCY stays as the
+  explainer: the constraint prevents, the invariant says why.
+- **Postgres advisory locks, not Redis.** Redlock's correctness under clock skew
+  and GC pauses is contested, and there was no reason to add a second datastore and
+  a disputed algorithm when the database already holding the money-critical rows
+  offers exact semantics — `pg_advisory_xact_lock` releases when its transaction
+  ends, including on crash, which an in-memory lock does not. Redis would earn its
+  place only for locking across services sharing no database.
+- **The claim key is namespaced, and that is not incidental.** Intent ids come from
+  a seeded `IdFactory`, so a preflight that persists a vulnerable suite and then a
+  fixed one mints the same intent id in both. A globally unique claim would have
+  refused the second, *legitimate* run — and because both `persistSuite` call sites
+  swallow their errors, the whole suite would have rolled back in silence. The
+  first version of the constraint had exactly this bug, on `checkout_intents
+  (intent_id)`. It is now scoped by `test_run_id` there, and by a deployment nonce
+  in the live claim table.
+- **The vulnerable integration does not get the claim.** It is gated on the same
+  `missing_idempotency` flag as the rest of the idempotency handling. Protecting a
+  deliberately broken merchant with the Guard's own infrastructure would delete the
+  defect the suite exists to find, and 8/8 recall would quietly become 7/8 for a
+  reason no report would explain.
+- **A definite failure releases the claim; a timeout does not.** A declined card
+  must leave the intent payable again, or one bad card number locks a buyer out
+  forever. A timed-out create-order may well have succeeded at the provider, so the
+  claim is deliberately kept — releasing it there is precisely how a double charge
+  happens.
 - **Persistence stores two things, for two jobs.** The normalised tables are the
   analytical surface — query which model tripped which invariant, or verify every
   stored hash chain in SQL. A run *also* stores an exact snapshot, because eight
