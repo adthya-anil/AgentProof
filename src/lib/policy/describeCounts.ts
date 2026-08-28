@@ -1,0 +1,60 @@
+/**
+ * Describes a policy evaluation's rule counts in words.
+ *
+ * Split out of the console so it can be tested, because the version it replaces was
+ * actively misleading. `Guard: 6/7 rules passed` invites exactly one reading — that
+ * one rule failed — when in fact `evaluated` counts every *applicable* rule and the
+ * seventh had been skipped: a payment-state rule has nothing to say at quote time.
+ *
+ * The result was a trace implying a finding on the same screen as "Every invariant
+ * that applied was satisfied". Two statements about the same evaluation, disagreeing.
+ *
+ * A skipped rule matters and is worth reporting — it is how coverage is measured —
+ * but it is not a failure, and nobody should have to reverse-engineer which one a
+ * fraction meant.
+ */
+export interface RuleCounts {
+  evaluated?: unknown;
+  passed?: unknown;
+  skipped?: unknown;
+}
+
+/**
+ * Names the rules that did not apply, for the row's detail line.
+ *
+ * "One rule did not apply" immediately invites "which one?", and that question is
+ * how coverage gets judged: `INV-PRODUCT-SAFETY` skipping because no allergens were
+ * declared is correct, while the same rule skipping for an allergic buyer would be a
+ * hole. A count alone cannot tell those apart.
+ */
+export function describeSkipped(value: unknown): string | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const names = value.filter((v): v is string => typeof v === "string");
+  if (names.length === 0) return undefined;
+  return `not applicable here: ${names.join(", ")}`;
+}
+
+export function describeRuleCounts(counts: RuleCounts): string {
+  const passed = asCount(counts.passed);
+  const skipped = asCount(counts.skipped);
+  const evaluated = asCount(counts.evaluated);
+
+  // Anything unaccounted for genuinely did not pass. Say so rather than let it
+  // hide inside a denominator.
+  const unaccounted = Math.max(0, evaluated - passed - skipped);
+
+  // The passed count is always stated, including when it is zero. "3 not
+  // applicable" alone leaves a reader to infer how many rules actually ruled on
+  // this step, and inference is what the old fraction already got wrong.
+  const parts: string[] = [`${passed} passed`];
+  if (skipped > 0) parts.push(`${skipped} not applicable`);
+  if (unaccounted > 0) parts.push(`${unaccounted} unresolved`);
+
+  return parts.join(", ");
+}
+
+function asCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.trunc(value)
+    : 0;
+}

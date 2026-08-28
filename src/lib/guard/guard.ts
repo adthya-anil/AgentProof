@@ -689,6 +689,13 @@ export class Guard {
         evaluated: evaluation.evaluatedCount,
         passed: evaluation.passedCount,
         skipped: evaluation.skippedCount,
+        // Named, not just counted. "One rule did not apply" invites the question
+        // "which one?", and that question is exactly how coverage is judged —
+        // INV-PRODUCT-SAFETY skipping because no allergens were declared is
+        // correct, whereas it skipping on an allergic buyer would be a hole.
+        skippedInvariants: evaluation.results
+          .filter((r) => r.status === "skipped")
+          .map((r) => r.invariantId),
         violations: evaluation.violations.map((v) => ({
           invariant: v.invariantId,
           severity: v.severity,

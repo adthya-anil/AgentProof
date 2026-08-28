@@ -7,6 +7,10 @@ import {
   visibleRecheck,
 } from "@/lib/live/scopedRecheck";
 import type { RecheckResult } from "@/lib/live/session";
+import {
+  describeRuleCounts,
+  describeSkipped,
+} from "@/lib/policy/describeCounts";
 import type {
   LiveEvent,
   LiveSummary,
@@ -682,10 +686,26 @@ function toRow(event: SerialisedAuditEvent): Row | null {
         at: Date.now(),
         icon: clean ? "⚖" : "⚠",
         tone: clean ? "ok" : violations.length > 0 ? "bad" : "warn",
+        /**
+         * Names skipped rules rather than hiding them in a fraction.
+         *
+         * This read `6/7 rules passed`, which invites exactly one conclusion: that
+         * one rule failed. It had not — `evaluated` counts every applicable rule
+         * and the seventh was *skipped*, because a rule about payment state has
+         * nothing to say at quote time. So the trace implied a finding on the same
+         * screen as "Every invariant that applied was satisfied", and the two
+         * flatly contradicted each other.
+         *
+         * A skipped rule is a real and reportable thing — it is how coverage is
+         * measured — but it is not a failure, and a reader should never have to
+         * work out which one a fraction meant.
+         */
         title: clean
-          ? `Guard: ${out.passed}/${out.evaluated} rules passed at ${out.checkpoint}`
+          ? `Guard: ${describeRuleCounts(out)} at ${out.checkpoint}`
           : `Guard blocked at ${out.checkpoint}`,
-        detail: clean ? undefined : (event.reason ?? undefined),
+        detail: clean
+          ? describeSkipped(out.skippedInvariants)
+          : (event.reason ?? undefined),
         payload: clean ? undefined : [...violations, ...escalations],
       };
     }
