@@ -179,5 +179,28 @@ await client.end();
 
     // More than one winner: the duplicate the constraint prevents, reproduced.
     expect(winners.length).toBeGreaterThan(1);
+
+    /**
+     * Drop the scratch table.
+     *
+     * It is this test's own apparatus, not part of the schema, and leaving it behind in
+     * a developer's database made `npm run db:migrate` report 19 tables where the README
+     * says 18 — a discrepancy that looks like a schema bug and is only litter. Dropped
+     * at the end rather than in an afterEach so a failure above leaves the rows
+     * inspectable.
+     */
+    assertChildrenRan(
+      await inParallelProcesses(
+        `
+import pg from ${PG_SPECIFIER};
+const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
+await client.connect();
+await client.query("drop table if exists mp_control");
+console.log("cleaned");
+await client.end();
+`,
+        1,
+      ),
+    );
   }, 60_000);
 });
