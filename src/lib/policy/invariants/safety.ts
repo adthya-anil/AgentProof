@@ -25,6 +25,14 @@ export const productSafetyInvariant: Invariant = {
   ],
   attribution: "integration",
   appliesAt: ["quote.created", "checkout.requested"],
+  /**
+   * Explicit declarations, not prose. The tri-state handling here already treats
+   * "unknown" as unsafe for an allergic buyer, and that logic is only meaningful when
+   * the merchant distinguishes unknown from absent. A catalogue with allergens buried
+   * in a description field supplies neither, and inferring them from text is exactly
+   * the model-in-the-verdict this engine refuses to be.
+   */
+  requires: ["product.lookup", "product.allergens", "product.vegan"],
   evaluate(ctx) {
     const quote = ctx.quote;
     if (!quote) return skip("No quote to evaluate");

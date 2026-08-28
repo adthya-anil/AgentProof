@@ -19,6 +19,12 @@ export const inventoryInvariant: Invariant = {
   ],
   attribution: "integration",
   appliesAt: ["quote.created", "checkout.requested"],
+  /**
+   * Needs a count rather than a boolean, and a version to notice a change it did not
+   * cause. A storefront exposing only `inStock: true` cannot answer either question,
+   * and guessing from a boolean would turn "some left" into "enough left".
+   */
+  requires: ["inventory.available", "inventory.version", "reservation.lookup"],
   evaluate(ctx) {
     if (!ctx.policy.inventory.requireCurrentAvailability) {
       return skip("Availability checks disabled by policy");
