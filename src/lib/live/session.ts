@@ -1,7 +1,11 @@
 import { BuyerAgent } from "../agent/buyer.js";
 import { randomUUID } from "node:crypto";
 import { llmFromEnv, llmPoolFromEnv } from "../agent/factory.js";
-import { getSession, rememberSession } from "./sessionStore.js";
+import {
+  findSessionByProviderId,
+  getSession,
+  rememberSession,
+} from "./sessionStore.js";
 import type { AuditEvent } from "../audit/events.js";
 import { ManualClock } from "../core/clock.js";
 import { IdFactory } from "../core/ids.js";
@@ -223,6 +227,7 @@ export async function runLiveSession(
         checkoutIntentId: authorised.id,
         paymentAttemptId: attempt.id,
         hostedUrl: attempt.hostedUrl,
+        providerOrderId: attempt.providerOrderId,
         createdAt: Date.now(),
       });
 
@@ -365,4 +370,32 @@ export async function recheckPayment(
     auditChainOk: env.audit.verify().ok,
     amount: attempt ? formatMinor(attempt.amountMinor) : null,
   };
+}
+
+
+/**
+ * Re-checks the session a provider identifier belongs to.
+ *
+ * The entry point for a webhook, which knows about payment links and orders and
+ * nothing about our session ids. Shares every step with the manual re-check on
+ * purpose: a payment must not be settled by a different, laxer code path just
+ * because a provider asked rather than a person.
+ */
+export async function recheckPaymentForProviderId(
+  providerId: string,
+): Promise<RecheckResult> {
+  const session = findSessionByProviderId(providerId);
+  if (!session) {
+    return {
+      found: false,
+      status: null,
+      verified: false,
+      fulfilled: false,
+      fulfilmentNote: `No live session is holding provider order ${providerId}.`,
+      events: [],
+      auditChainOk: true,
+      amount: null,
+    };
+  }
+  return recheckPayment(session.id);
 }

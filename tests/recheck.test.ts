@@ -77,6 +77,7 @@ async function authorisedSession(id: string) {
     checkoutIntentId: authorised.id,
     paymentAttemptId: attempt.id,
     hostedUrl: attempt.hostedUrl ?? "https://example.invalid/pay",
+    providerOrderId: attempt.providerOrderId,
     createdAt: Date.now(),
   });
 

@@ -28,7 +28,7 @@ an API key or network access unless you explicitly opt in.
 
 ```bash
 npm install
-npm test                    # 222 tests
+npm test                    # 263 tests
 npm run typecheck
 
 npm run demo:happy          # successful ₹1,399 transaction
@@ -355,6 +355,37 @@ lets a second payable order through — while both live models `passed` the same
 goal, because neither tried to pay twice. Drop the deterministic half and you stop
 detecting the defect; drop the live half and you never learn how a real agent
 behaves.
+
+### Paying a real link syncs on its own
+
+A hosted payment link is asynchronous. The agent creates it, the Guard authorises
+it, `INV-PAYMENT-STATE` refuses to fulfil while the payment is uncaptured — the
+correct answer at that moment — and then a human goes and pays, minutes later.
+
+Both halves of the sync exist, because they solve different problems:
+
+- **Polling.** While a payment is outstanding the console asks Razorpay every four
+  seconds, for up to five minutes. Pay in the other tab and the page updates on its
+  own. This is what works on a laptop, since Razorpay cannot reach `localhost`.
+- **Webhook** at `/api/razorpay/webhook`, for a deployed URL. Point Razorpay at it
+  for `payment_link.paid` and `payment.captured`.
+
+Two rules govern the webhook, and both are refusals:
+
+1. **Nothing is believed until the HMAC signature verifies** against
+   `RAZORPAY_WEBHOOK_SECRET`, in constant time, over the exact raw bytes. An unset
+   secret rejects everything — it fails closed, because an unauthenticated webhook
+   that marks orders paid is a way for anyone to have goods dispatched for free.
+2. **The payload is a trigger, not a source of truth.** Even once verified, no
+   amount or status is read out of it. The handler goes and asks Razorpay what
+   happened and puts that answer through the same Guard checkpoints as everything
+   else, so the settlement path is identical whether a person or a provider
+   initiated it.
+
+Verified against a running server: a forged signature, a missing signature, and a
+valid signature over a swapped body are all `401`; an authentic event for a journey
+no longer in memory is `200 matched=false`; and an event that is not a payment
+completion is acknowledged and ignored rather than retried.
 
 ### Inconclusive is a real outcome
 
@@ -799,6 +830,7 @@ Copy `.env.example` to `.env`. Defaults run fully offline and deterministically.
 PAYMENT_ADAPTER=fake        # or "razorpay" with rzp_test_ credentials
 RAZORPAY_KEY_ID=            # must start with rzp_test_
 RAZORPAY_KEY_SECRET=
+RAZORPAY_WEBHOOK_SECRET=    # optional; only useful on a public URL
 
 LLM_ADAPTER=scripted        # scripted | openai | anthropic
 LLM_API_KEY=                # required for openai; anthropic falls back to it

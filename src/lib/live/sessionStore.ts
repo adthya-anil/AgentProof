@@ -23,6 +23,8 @@ export interface LiveSessionHandle {
   checkoutIntentId: string;
   paymentAttemptId: string;
   hostedUrl: string;
+  /** The provider's id — `plink_…` or `order_…` — for matching a webhook. */
+  providerOrderId: string;
   createdAt: number;
 }
 
@@ -50,6 +52,23 @@ export function rememberSession(handle: LiveSessionHandle): void {
 export function getSession(id: string): LiveSessionHandle | null {
   evictStale();
   return sessions.get(id) ?? null;
+}
+
+/**
+ * Finds a session by the provider's own identifier.
+ *
+ * A webhook knows nothing about our session ids — it reports a payment link or an
+ * order. Matching on the provider id is what lets Razorpay's own notification
+ * settle the journey it belongs to.
+ */
+export function findSessionByProviderId(
+  providerId: string,
+): LiveSessionHandle | null {
+  evictStale();
+  for (const handle of sessions.values()) {
+    if (handle.providerOrderId === providerId) return handle;
+  }
+  return null;
 }
 
 export function clearSessions(): void {

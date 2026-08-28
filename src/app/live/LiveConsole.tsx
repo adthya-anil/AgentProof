@@ -20,6 +20,17 @@ import type {
  * never a parallel narration that could drift from it.
  */
 
+/**
+ * Poll cadence while a payment is outstanding.
+ *
+ * Four seconds feels immediate after paying in another tab without hammering a
+ * payment API. Seventy-five attempts is five minutes — long enough to finish a
+ * netbanking flow, short enough that a page left open overnight is not still
+ * calling Razorpay in the morning.
+ */
+const PAYMENT_POLL_INTERVAL_MS = 4_000;
+const PAYMENT_POLL_ATTEMPTS = 75;
+
 interface Row {
   key: string;
   at: number;
@@ -96,6 +107,7 @@ export default function LiveConsole({
   const [hosted, setHosted] = useState<Extract<LiveEvent, { kind: "hosted_payment" }> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [rechecking, setRechecking] = useState(false);
+  const [watching, setWatching] = useState(false);
   const [recheckResult, setRecheckResult] = useState<RecheckResult | null>(null);
   const [recheckError, setRecheckError] = useState<string | null>(null);
   const sourceRef = useRef<EventSource | null>(null);
@@ -175,9 +187,9 @@ export default function LiveConsole({
    * any fulfilment appear as further steps in the journey rather than as a
    * disconnected status box. They are real entries in the hash-chained log.
    */
-  const recheck = useCallback(async () => {
+  const recheck = useCallback(async (silent = false) => {
     if (!hosted?.sessionId) return;
-    setRechecking(true);
+    if (!silent) setRechecking(true);
     setRecheckError(null);
 
     try {
@@ -188,9 +200,16 @@ export default function LiveConsole({
       const body = (await response.json()) as RecheckResult & { error?: string };
 
       if (body.error) {
-        setRecheckError(body.error);
+        // A silent poll must not spray errors at someone who is mid-payment on
+        // another tab; the manual button still surfaces them.
+        if (!silent) setRecheckError(body.error);
         return;
       }
+
+      // Nothing has changed yet. Returning early keeps the trace clean rather
+      // than appending an identical "still not captured" row every few seconds.
+      if (silent && !body.verified && !body.fulfilled) return;
+
       setRecheckResult(body);
       // Reuse the same renderer as the live stream, so a verification looks like
       // the journey step it is rather than a separate status widget.
@@ -199,11 +218,47 @@ export default function LiveConsole({
         .filter((row): row is Row => row !== null);
       setRows((prev) => [...prev, ...appended]);
     } catch (cause) {
-      setRecheckError(cause instanceof Error ? cause.message : String(cause));
+      if (!silent) {
+        setRecheckError(cause instanceof Error ? cause.message : String(cause));
+      }
     } finally {
-      setRechecking(false);
+      if (!silent) setRechecking(false);
     }
   }, [hosted]);
+
+  /**
+   * Watches for the payment without anyone having to press anything.
+   *
+   * A hosted link is paid in another tab, so the natural thing is for this one to
+   * notice. Razorpay's own webhook is the right mechanism in production and needs a
+   * publicly reachable URL, which localhost is not — so polling is what actually
+   * works on a laptop, and the webhook route exists for a real deployment.
+   *
+   * Stops the moment the money is confirmed, and gives up after a bounded window
+   * rather than calling a payment API for ever on a page somebody left open.
+   */
+  useEffect(() => {
+    if (!hosted?.sessionId) return;
+    if (recheckResult?.fulfilled || recheckResult?.verified) return;
+
+    let attempts = 0;
+    setWatching(true);
+
+    const timer = setInterval(() => {
+      attempts += 1;
+      if (attempts > PAYMENT_POLL_ATTEMPTS) {
+        setWatching(false);
+        clearInterval(timer);
+        return;
+      }
+      void recheck(true);
+    }, PAYMENT_POLL_INTERVAL_MS);
+
+    return () => {
+      setWatching(false);
+      clearInterval(timer);
+    };
+  }, [hosted, recheckResult, recheck]);
 
   const stop = useCallback(() => {
     sourceRef.current?.close();
@@ -365,15 +420,26 @@ export default function LiveConsole({
               way to ask again the console sat on verified=false forever and a
               successful payment looked like a broken app.
             */}
+            {/*
+              Kept alongside the automatic watch, not replaced by it. Polling can
+              be stopped by a bounded window, a closed tab or a lost session, and a
+              viewer who has just paid should never be stuck with no way to ask.
+            */}
             <button
               type="button"
-              onClick={recheck}
+              onClick={() => void recheck()}
               disabled={rechecking}
-              className="primary"
             >
-              {rechecking ? "Checking Razorpay…" : "I've paid — verify and fulfil"}
+              {rechecking ? "Checking Razorpay…" : "Check now"}
             </button>
           </div>
+
+          {watching && !recheckResult?.verified && (
+            <p className="note" style={{ marginTop: "0.85rem", marginBottom: 0 }}>
+              <span className="pulse">●</span> Watching Razorpay for this payment —
+              pay in the other tab and this page will update on its own.
+            </p>
+          )}
 
           <p className="note" style={{ marginBottom: 0 }}>
             Use <strong>Netbanking</strong> and pick Success on the mock page.
