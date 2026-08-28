@@ -102,10 +102,26 @@ async function main(): Promise<void> {
       "  suspend at every await — so allocation, reservation and commit are\n" +
       "  exercised out of order. That is what catches an allocator that double-\n" +
       "  promises stock.\n" +
-      "  It is not a test of a multi-process deployment. Reservation check-and-hold\n" +
-      "  is synchronous within a single Node process, so no interleaving can split\n" +
-      "  it. Running two AgentProof processes against one shared store would need\n" +
-      "  a row lock or a unique constraint to hold the same guarantee.",
+      "\n" +
+      "  The two runs above are identical, and that is expected rather than a\n" +
+      "  finding. None of the eight seeded defects touches allocation, so there is\n" +
+      "  no mutation that could make the vulnerable integration oversell. Both are\n" +
+      "  printed because the numbers should match; read them as one result, not a\n" +
+      "  comparison.\n" +
+      "\n" +
+      "  This demo also cannot fail on overselling, so it cannot be the evidence\n" +
+      "  that the locking works. Check-and-hold is synchronous inside one process,\n" +
+      "  so no interleaving can split it whether a lock is held or not. What does\n" +
+      "  demonstrate it:\n" +
+      "    tests/locks.test.ts          the same check-and-hold with one await\n" +
+      "                                between the halves grants all five buyers\n" +
+      "                                three units. The lock closes it, and a\n" +
+      "                                control locking a different key oversells\n" +
+      "                                again — so the pass is the lock, not luck.\n" +
+      "    tests/multi-process.test.ts  four real OS processes, one database, one\n" +
+      "                                payable order. The same four without the\n" +
+      "                                unique constraint produce four winners.\n" +
+      "                                Needs DATABASE_URL; skipped without it.",
   );
 
   if (failures > 0) {
@@ -114,7 +130,7 @@ async function main(): Promise<void> {
   }
   console.log(
     "\n✓ No overselling, no duplicate payable orders, audit chain intact\n" +
-      "  under concurrent load — on both the vulnerable and fixed integrations.",
+      "  under interleaved load, and at least one buyer still succeeded.",
   );
 }
 
