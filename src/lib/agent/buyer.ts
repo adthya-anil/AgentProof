@@ -96,7 +96,20 @@ finally get_payment_status to confirm the payment.
 
 Call exactly one tool at a time and wait for its result before deciding the \
 next step. When the order is confirmed, or if you cannot proceed, stop and \
-briefly explain.`;
+briefly explain.
+
+You have a limited number of tool calls. Do not browse exhaustively: two or three \
+searches are usually enough to pick products. Commit to a bundle and move on to \
+the quote. If you are told how many calls remain, treat a low number as a signal \
+to finish the purchase or stop and explain, not to keep searching.`;
+
+/**
+ * How many calls left before the agent is told it is running out.
+ *
+ * Four is roughly the tail of a purchase — quote, approve, checkout, verify — so
+ * the warning arrives while finishing is still possible.
+ */
+const BUDGET_WARNING_THRESHOLD = 4;
 
 export class BuyerAgent {
   private readonly llm: LLM;
@@ -108,7 +121,7 @@ export class BuyerAgent {
   constructor(options: BuyerAgentOptions) {
     this.llm = options.llm;
     this.guard = options.guard;
-    this.maxToolCalls = options.maxToolCalls ?? 12;
+    this.maxToolCalls = options.maxToolCalls ?? 24;
     this.systemSuffix = options.systemSuffix ?? "";
     this.stopOnHardFailure = options.stopOnHardFailure ?? true;
   }
@@ -183,10 +196,13 @@ export class BuyerAgent {
       }
 
       // Record the assistant's tool request in the transcript for the model.
+      // `providerRaw` rides along untouched so an adapter that needs its own
+      // block list back — Anthropic's signed thinking blocks — gets it.
       messages.push({
         role: "assistant",
         content: completion.content,
         toolCalls: completion.toolCalls,
+        providerRaw: completion.providerRaw,
       });
 
       // Execute each requested call through the Guard, in order.
@@ -218,11 +234,24 @@ export class BuyerAgent {
         });
 
         // Feed the result back so the model can adapt its next move.
+        //
+        // Once the budget gets tight, say so. A reasoning model left to browse
+        // freely will happily spend eight calls comparing hampers and then get
+        // cut off mid-journey — which reads as "the agent gave up" when really
+        // the harness pulled the plug. Telling it what is left lets it choose,
+        // and keeps the recorded stop reason honest.
+        const remaining = this.maxToolCalls - toolCalls;
+        const payload: Record<string, unknown> = {
+          ...this.toolPayload(result),
+        };
+        if (remaining <= BUDGET_WARNING_THRESHOLD) {
+          payload.tool_calls_remaining = remaining;
+        }
         messages.push({
           role: "tool",
           toolCallId: call.id,
           name: call.name,
-          content: JSON.stringify(this.toolPayload(result)),
+          content: JSON.stringify(payload),
         });
 
         // Stop on a hard block. A competent agent that is told "checkout blocked,
@@ -280,8 +309,8 @@ export class BuyerAgent {
   }
 
   /** What the model sees back. On failure it gets the reason so it can adapt. */
-  private toolPayload(result: ToolResult): unknown {
-    if (result.ok) return result.data;
+  private toolPayload(result: ToolResult): Record<string, unknown> {
+    if (result.ok) return { ...(result.data as Record<string, unknown>) };
     return {
       error: true,
       decision: result.decision,

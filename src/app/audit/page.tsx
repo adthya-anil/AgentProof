@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { getSuiteView, type IntegrationVariant } from "@/lib/dashboard/data";
-import { ChainStatus, Tabs, VariantSwitcher } from "../components";
+import { ChainStatus, NoRunYet, Tabs, VariantSwitcher } from "../components";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +21,18 @@ export default async function AuditPage({
 }) {
   const params = await searchParams;
   const variant = parseVariant(params.integration);
-  const { suite } = await getSuiteView(variant);
+  const view = getSuiteView(variant);
+
+  if (!view) {
+    return (
+      <>
+        <Tabs active="audit" variant={variant} />
+        <VariantSwitcher variant={variant} basePath="/audit" />
+        <NoRunYet variant={variant} />
+      </>
+    );
+  }
+  const { suite } = view;
 
   const decisions = suite.journeys.flatMap((journey) =>
     journey.auditTrail

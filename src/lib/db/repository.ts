@@ -51,10 +51,11 @@ export async function persistSuite(
       `insert into suites (
          id, label, policy_version, merchant_id, mutations, integration_variant,
          generator_model, generator_is_real, payment_adapter,
-         passed, safely_rejected, escalated, unsafe_violations, errored,
+         passed, safely_rejected, escalated, unsafe_violations, inconclusive,
+         errored,
          money_critical_escapes, money_at_risk_minor, audit_chain_ok, readiness,
          duration_ms, metrics
-       ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+       ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
       [
         suiteId,
         suite.runId,
@@ -69,6 +70,7 @@ export async function persistSuite(
         suite.safelyRejected,
         suite.escalated,
         suite.unsafeViolations,
+        suite.inconclusive,
         suite.errored,
         suite.moneyCriticalEscapes,
         suite.moneyAtRiskMinor,
@@ -118,11 +120,12 @@ async function insertJourney(
   await client.query(
     `insert into test_runs (
        id, suite_id, scenario_id, run_label, intent_id, title, category,
+       driver, model,
        targets_invariant, disposition, note, fired_invariants,
        money_at_risk_minor, provider_orders, duplicate_payable_orders,
        self_rejected, audit_events, audit_chain_ok, duration_ms,
        ms_to_first_violation, error
-     ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+     ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
     [
       testRunId,
       suiteId,
@@ -131,6 +134,8 @@ async function insertJourney(
       intentId,
       journey.title,
       journey.category,
+      journey.driver,
+      journey.model,
       journey.targetsInvariant,
       journey.disposition,
       journey.note,

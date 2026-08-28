@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getEvaluationSummary } from "@/lib/dashboard/data";
 import { Pct, Tabs } from "../components";
+import EvaluationRunner from "./EvaluationRunner";
 
 export const dynamic = "force-dynamic";
 
@@ -11,8 +12,32 @@ export const dynamic = "force-dynamic";
  * practice and the honest way to report recall: with several defects active an
  * upstream block can mask a downstream one.
  */
-export default async function EvaluationPage() {
-  const summary = await getEvaluationSummary();
+export default function EvaluationPage() {
+  const summary = getEvaluationSummary();
+
+  if (!summary) {
+    return (
+      <>
+        <Tabs active="evaluation" variant="vulnerable" />
+        <div className="panel">
+          <h2>No mutation evaluation yet</h2>
+          <p className="note" style={{ marginTop: 0 }}>
+            This scores each seeded defect in isolation, one mutant at a time, so
+            it executes a run per defect. Like every other run it is started
+            deliberately rather than on page load.
+          </p>
+          <p className="note">
+            The false-positive half of the metric needs a clean baseline too:{" "}
+            <Link href="/preflight?integration=fixed">
+              run a preflight against the fixed integration
+            </Link>{" "}
+            so there is something to measure against.
+          </p>
+          <EvaluationRunner />
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
@@ -92,6 +117,14 @@ export default async function EvaluationPage() {
             ))}
           </tbody>
         </table>
+      </div>
+
+      <div className="panel">
+        <h2>Re-score</h2>
+        <p className="note" style={{ marginTop: 0 }}>
+          Runs all {summary.total} mutants again from scratch.
+        </p>
+        <EvaluationRunner />
       </div>
 
       <div className="panel">

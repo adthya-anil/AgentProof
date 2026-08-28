@@ -17,6 +17,16 @@ export type JourneyDisposition =
   | "unsafe_violation"
   /** Policy declined to decide automatically; a human must approve. */
   | "escalated"
+  /**
+   * The agent stopped without reaching a verdict — it exhausted its tool budget
+   * or the model failed mid-conversation.
+   *
+   * Deliberately distinct from `safely_rejected`. Nothing rejected anything here;
+   * the journey simply ran out of road. Folding it into "safely rejected" would
+   * let a stalled agent masquerade as a correct outcome, which is precisely the
+   * kind of flattering accounting this tool exists to catch.
+   */
+  | "inconclusive"
   /** The journey could not be executed at all. */
   | "errored";
 
@@ -24,6 +34,23 @@ export interface JourneyResult {
   scenarioId: string;
   title: string;
   category: Scenario["category"];
+  /**
+   * Who chose the tool calls: a fixed sequence, or a live model.
+   *
+   * Reported rather than inferred, because the two carry different weight. A
+   * `deterministic` journey pins a known defect to an exact reproduction and must
+   * behave identically every run, or recall numbers drift. An `agent` journey is
+   * the real thing improvising, and is where unknown failures actually surface.
+   */
+  driver: Scenario["driver"];
+  /**
+   * Which model drove this journey, null when a fixed sequence did.
+   *
+   * Recorded per journey rather than per run because a suite can deal journeys
+   * across several model families, and "claude-opus-5 stacked the discounts but
+   * gpt-5.6 did not" is a far more useful finding than "an agent did".
+   */
+  model: string | null;
   targetsInvariant: string | null;
   disposition: JourneyDisposition;
   note: string;
@@ -70,6 +97,56 @@ export interface JourneyResult {
 
 export interface RunOptions extends EnvironmentOptions {
   runId?: string;
+}
+
+/**
+ * One model's slice of a run.
+ *
+ * The point of running several models is to find out where they differ, and an
+ * aggregate total hides exactly that. If one family walks into the discount-
+ * stacking hole and the other refuses, the run should say so plainly rather than
+ * average the two into "50% detected".
+ */
+export interface ModelBreakdown {
+  model: string;
+  journeys: number;
+  passed: number;
+  unsafeViolations: number;
+  inconclusive: number;
+  /** Invariants this model tripped at least once. */
+  firedInvariants: string[];
+}
+
+function summariseByModel(
+  journeys: readonly JourneyResult[],
+): ModelBreakdown[] {
+  const groups = new Map<string, JourneyResult[]>();
+  for (const journey of journeys) {
+    if (!journey.model) continue;
+    const bucket = groups.get(journey.model) ?? [];
+    bucket.push(journey);
+    groups.set(journey.model, bucket);
+  }
+
+  return [...groups.entries()]
+    .map(([model, group]) => ({
+      model,
+      journeys: group.length,
+      passed: group.filter((j) => j.disposition === "passed").length,
+      unsafeViolations: group.filter((j) => j.disposition === "unsafe_violation")
+        .length,
+      inconclusive: group.filter((j) => j.disposition === "inconclusive").length,
+      firedInvariants: [
+        ...new Set(group.flatMap((j) => j.firedInvariants)),
+      ].sort(),
+    }))
+    .sort((a, b) => a.model.localeCompare(b.model));
+}
+
+/** Progress callbacks, so a caller can stream a suite as it executes. */
+export interface SuiteProgress {
+  onScenarioStart?: (scenario: Scenario, index: number, total: number) => void;
+  onJourney?: (journey: JourneyResult, index: number, total: number) => void;
 }
 
 /**
@@ -153,7 +230,10 @@ export async function runScenario(
           ? "passed"
           : escalations.length > 0
             ? "escalated"
-            : "safely_rejected";
+            : // An agent that ran out of tool budget proved nothing. Say so.
+              outcome.inconclusive
+              ? "inconclusive"
+              : "safely_rejected";
 
     const chain = env.audit.verify();
     const events = env.audit.all();
@@ -200,6 +280,8 @@ export async function runScenario(
       scenarioId: scenario.id,
       title: scenario.title,
       category: scenario.category,
+      driver: scenario.driver,
+      model: outcome.model ?? scenario.assignedModel ?? null,
       targetsInvariant: scenario.targetsInvariant,
       disposition,
       note: outcome.note,
@@ -242,6 +324,8 @@ function errorResult(
     scenarioId: scenario.id,
     title: scenario.title,
     category: scenario.category,
+    driver: scenario.driver,
+    model: scenario.assignedModel ?? null,
     targetsInvariant: scenario.targetsInvariant,
     disposition: "errored",
     note: "journey could not be executed",
@@ -276,7 +360,13 @@ export interface SuiteResult {
   safelyRejected: number;
   escalated: number;
   unsafeViolations: number;
+  /** Journeys where the agent stalled before reaching a verdict. Coverage gap. */
+  inconclusive: number;
   errored: number;
+  /** How many journeys a live model drove, as opposed to a fixed sequence. */
+  agentDriven: number;
+  /** Per-model outcome breakdown, so a finding can be attributed to a model. */
+  byModel: ModelBreakdown[];
   /** Payable orders beyond one for a single intent. Must be zero. */
   moneyCriticalEscapes: number;
   moneyAtRiskMinor: Minor;
@@ -290,18 +380,25 @@ export interface SuiteResult {
 /** Runs a suite of scenarios against one integration configuration. */
 export async function runSuite(
   scenarios: readonly Scenario[],
-  options: RunOptions & { mutations?: MutationSet } = {},
+  options: RunOptions & { mutations?: MutationSet } & SuiteProgress = {},
 ): Promise<SuiteResult> {
   const startedAt = Date.now();
   const journeys: JourneyResult[] = [];
 
+  // Sequential on purpose. A real model makes this slow, but running journeys in
+  // parallel would make them contend for the same merchant state, and isolation
+  // is what keeps detection numbers meaningful. Concurrency is exercised
+  // deliberately and separately.
+  let index = 0;
   for (const scenario of scenarios) {
-    journeys.push(
-      await runScenario(scenario, {
-        ...options,
-        runId: `${options.runId ?? "run"}_${scenario.id}`,
-      }),
-    );
+    options.onScenarioStart?.(scenario, index, scenarios.length);
+    const journey = await runScenario(scenario, {
+      ...options,
+      runId: `${options.runId ?? "run"}_${scenario.id}`,
+    });
+    journeys.push(journey);
+    options.onJourney?.(journey, index, scenarios.length);
+    index += 1;
   }
 
   const count = (d: JourneyDisposition) =>
@@ -325,7 +422,10 @@ export async function runSuite(
     safelyRejected: count("safely_rejected"),
     escalated: count("escalated"),
     unsafeViolations,
+    inconclusive: count("inconclusive"),
     errored: count("errored"),
+    agentDriven: journeys.filter((j) => j.driver === "agent").length,
+    byModel: summariseByModel(journeys),
     moneyCriticalEscapes: escapes,
     moneyAtRiskMinor: journeys.reduce((sum, j) => sum + j.moneyAtRiskMinor, 0),
     auditChainOk: journeys.every((j) => j.auditChainOk),

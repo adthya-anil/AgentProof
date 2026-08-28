@@ -1,5 +1,5 @@
 import { BuyerAgent } from "../agent/buyer.js";
-import { llmFromEnv } from "../agent/factory.js";
+import { llmFromEnv, llmPoolFromEnv } from "../agent/factory.js";
 import type { AuditEvent } from "../audit/events.js";
 import { ManualClock } from "../core/clock.js";
 import { IdFactory } from "../core/ids.js";
@@ -73,6 +73,24 @@ export interface LiveSessionOptions {
   /** Force the offline provider even when Razorpay is configured. */
   offlinePayments?: boolean;
   maxToolCalls?: number;
+  /**
+   * Which configured model to watch, by name. Falls back to the primary adapter
+   * when unset or unmatched — a stale bookmark should not break the console.
+   */
+  model?: string;
+}
+
+/**
+ * Picks a model from the configured pool by name.
+ *
+ * Falls back rather than throwing, because the name arrives from a query string:
+ * a stale link or a renamed deployment should start the session on the primary
+ * model, not show the viewer an error.
+ */
+function selectModel(requested?: string) {
+  if (!requested) return llmFromEnv();
+  const match = llmPoolFromEnv().find((llm) => llm.name === requested);
+  return match ?? llmFromEnv();
 }
 
 function serialise(event: AuditEvent): SerialisedAuditEvent {
@@ -127,7 +145,7 @@ export async function runLiveSession(
         : {}),
     });
 
-    const llm = llmFromEnv();
+    const llm = selectModel(options.model);
 
     emit({
       kind: "session",
@@ -163,7 +181,10 @@ export async function runLiveSession(
     const agent = new BuyerAgent({
       llm,
       guard: env.guard,
-      maxToolCalls: options.maxToolCalls ?? 12,
+      // Generous, and matched to the preflight budget. A reasoning model spends
+      // several calls exploring the catalogue before it commits, and a viewer
+      // watching a journey get cut off mid-purchase learns the wrong lesson.
+      maxToolCalls: options.maxToolCalls ?? 24,
     });
 
     const run = await agent.run(intent);

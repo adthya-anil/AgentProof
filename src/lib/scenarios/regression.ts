@@ -126,7 +126,15 @@ async function completePayment(
   };
 }
 
-export const REGRESSION_SCENARIOS: readonly Scenario[] = Object.freeze([
+/**
+ * The fixed regression suite: hand-written tool sequences, no model involved.
+ *
+ * Deterministic on purpose. Each of these pins a specific defect to an exact
+ * reproduction, and measured recall is only meaningful if the reproduction is
+ * identical every run. The live-model counterpart lives in `agentDriven.ts` and
+ * answers a different question: would a real agent stumble into this by itself?
+ */
+const DETERMINISTIC_SCENARIOS: readonly Omit<Scenario, "driver">[] = Object.freeze([
   {
     id: "reg-01-normal",
     title: "Normal successful transaction",
@@ -428,6 +436,27 @@ export const REGRESSION_SCENARIOS: readonly Scenario[] = Object.freeze([
     },
   },
 ]);
+
+export const REGRESSION_SCENARIOS: readonly Scenario[] = Object.freeze(
+  DETERMINISTIC_SCENARIOS.map((scenario) => ({
+    ...scenario,
+    driver: "deterministic" as const,
+  })),
+);
+
+/** The buyer goals behind the fixed suite, reused by the agent-driven variants. */
+export const REGRESSION_GOALS: readonly Pick<
+  Scenario,
+  "id" | "title" | "targetsInvariant" | "intent" | "category"
+>[] = Object.freeze(
+  DETERMINISTIC_SCENARIOS.map((s) => ({
+    id: s.id,
+    title: s.title,
+    category: s.category,
+    targetsInvariant: s.targetsInvariant,
+    intent: s.intent,
+  })),
+);
 
 export function scenarioById(id: string): Scenario | undefined {
   return REGRESSION_SCENARIOS.find((s) => s.id === id);

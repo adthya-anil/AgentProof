@@ -99,6 +99,9 @@ CREATE TABLE IF NOT EXISTS suites (
   safely_rejected       INTEGER NOT NULL,
   escalated             INTEGER NOT NULL,
   unsafe_violations     INTEGER NOT NULL,
+  -- Live-agent journeys that ended without anything deciding them. Kept out of
+  -- the counts above on purpose: they verified nothing.
+  inconclusive          INTEGER NOT NULL DEFAULT 0,
   errored               INTEGER NOT NULL,
   money_critical_escapes INTEGER NOT NULL,
   money_at_risk_minor   BIGINT NOT NULL,
@@ -119,6 +122,12 @@ CREATE TABLE IF NOT EXISTS test_runs (
   intent_id                TEXT,
   title                    TEXT NOT NULL,
   category                 TEXT NOT NULL,
+  -- 'deterministic' for a fixed tool sequence, 'agent' for a live model.
+  driver                   TEXT NOT NULL DEFAULT 'deterministic',
+  -- Which model drove it; NULL when a fixed sequence did. Stored per journey
+  -- because one suite can deal journeys across several model families, and a
+  -- finding is only actionable if you know which agent produced it.
+  model                    TEXT,
   targets_invariant        TEXT,
   disposition              TEXT NOT NULL,
   note                     TEXT NOT NULL,
@@ -275,3 +284,28 @@ CREATE TABLE IF NOT EXISTS orders (
   created_at          TIMESTAMPTZ NOT NULL,
   PRIMARY KEY (test_run_id, id)
 );
+
+
+-- ---------------------------------------------------------------------------
+-- Additive migrations
+-- ---------------------------------------------------------------------------
+--
+-- `migrate()` replays this whole file on every startup, so everything above is
+-- written with IF NOT EXISTS. That creates a trap: a table added earlier is left
+-- untouched, so a column added to a CREATE TABLE above never reaches a database
+-- that already exists. The first symptom would be an insert failing on a live
+-- deployment while a fresh one works perfectly.
+--
+-- New columns therefore go here as well, as idempotent ALTERs.
+
+ALTER TABLE test_runs
+  ADD COLUMN IF NOT EXISTS driver TEXT NOT NULL DEFAULT 'deterministic';
+ALTER TABLE test_runs
+  ADD COLUMN IF NOT EXISTS model TEXT;
+
+ALTER TABLE suites
+  ADD COLUMN IF NOT EXISTS inconclusive INTEGER NOT NULL DEFAULT 0;
+
+-- Answering "which model tripped this invariant" is the point of running more
+-- than one, so it should not require a sequential scan.
+CREATE INDEX IF NOT EXISTS test_runs_model_idx ON test_runs (model);

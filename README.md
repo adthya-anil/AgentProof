@@ -28,7 +28,7 @@ an API key or network access unless you explicitly opt in.
 
 ```bash
 npm install
-npm test                    # 193 tests
+npm test                    # 222 tests
 npm run typecheck
 
 npm run demo:happy          # successful ₹1,399 transaction
@@ -39,6 +39,7 @@ npm run demo:concurrency    # 5 buyers racing for 3 units of stock
 npm run demo:razorpay       # real Razorpay test-mode payment (needs test keys)
 
 npm run build && npm start  # dashboard on http://localhost:3000
+                            # then open /preflight and press Run
 
 npm run db:up               # optional: local Postgres for persisted runs
 npm run db:migrate
@@ -54,7 +55,10 @@ opt-in, and the suite must pass without them.
 
 From `npm run demo:preflight`: **25 journeys** (12 fixed regression +
 4 state-perturbation + 9 AI-generated), the identical suite run against both
-integrations.
+integrations, on the deterministic scripted model so the figures are reproducible.
+Adding the live-agent half from `/preflight` roughly doubles the suite and the
+outcomes will differ run to run — that is the point of it, and why it is reported
+separately rather than averaged into this table.
 
 | | Vulnerable integration | Fixed integration |
 |---|---|---|
@@ -235,6 +239,8 @@ upstream provider had a bad minute.
 |---|---|
 | `/hamperhub` | **The merchant under test**: catalog, tool surface, promotions |
 | `/hamperhub/agent` | **Watch a buyer agent shop**, live, on either integration |
+| `/live` | **Live agent console**: one journey, streamed decision by decision, either model |
+| `/preflight` | **Start a run.** Streams every journey as it executes |
 | `/` | Readiness, outcome counts, category coverage, journey table |
 | `/violations` | Findings split by responsibility (see below) |
 | `/journey/[id]` | Full replay: intent, tool calls, state changes, failed invariant |
@@ -242,11 +248,127 @@ upstream provider had a bad minute.
 | `/audit` | Hash-chain status and every money-critical decision |
 | `/policy` | The enforced policy and all 12 invariants |
 
-Toggle between the vulnerable and fixed integrations from any page. Runs execute
-in-process on request — deterministic and ~50ms — so the dashboard always shows a
-run that just happened rather than a cached summary that may no longer match the
-code. Every page is a server component; the pages ship no client JavaScript, and
-there is no `next/font`, so the build needs no network.
+Toggle between the vulnerable and fixed integrations from any page. Every page is
+a server component apart from the two streaming consoles, and there is no
+`next/font`, so the build needs no network.
+
+### Runs are triggered, never automatic
+
+Report pages read a stored run. They never execute one.
+
+This was not always true, and the reason it changed matters. When journeys were
+scripted a suite finished in ~50ms, so running one on every page load was free and
+kept the report honest by construction. The moment a real model started driving
+the agents that stopped being defensible: opening `/` would silently spend minutes
+and real tokens on work nobody asked for, and with nine concurrent live agents the
+page simply never finished loading.
+
+So the flow is explicit:
+
+1. Open `/preflight`, choose the integration and the composition, press **Run**.
+2. The run streams over SSE — each journey appears as it starts and fills in as it
+   finishes, with its tool path and the invariants that fired.
+3. The result is stored in memory and mirrored to Postgres when `DATABASE_URL` is
+   set. Every report page then reads it, instantly.
+
+Before the first run, report pages say so and link to `/preflight` rather than
+showing a stale or invented summary.
+
+### Two model families, because a merchant doesn't get to choose
+
+A merchant cannot pick which agent shops their store, so testing against one model
+tests a narrower world than the one they ship into. AgentProof drives journeys
+through both an OpenAI-compatible endpoint and the Anthropic Messages API, and
+records **per journey** which model drove it.
+
+Name a second deployment in `.env` and every live-agent goal runs twice — once per
+model, same buyer request, same target invariant:
+
+```
+LLM_ADAPTER=openai
+LLM_MODEL=gpt-5.6-sol
+LLM_BASE_URL=https://<resource>.services.ai.azure.com/openai/v1
+LLM_API_KEY=...
+
+ANTHROPIC_MODEL=claude-opus-5
+ANTHROPIC_BASE_URL=https://<resource>.services.ai.azure.com/anthropic
+# ANTHROPIC_API_KEY falls back to LLM_API_KEY — one Foundry resource, one secret
+```
+
+Reports then gain a **Where the models differ** table, which is the point. From a
+real run against the vulnerable integration, both models given the identical
+request:
+
+| Model | Effective discount reached | Invariants tripped |
+|---|---|---|
+| `gpt-5.6-sol` | 7.75% on ₹1,277 | `INV-DISCOUNT-CAP` |
+| `claude-opus-5` | 14.23% on ₹1,496, 4 components stacked | `INV-DISCOUNT-CAP`, `INV-FLOOR-PRICE` |
+
+Same store, same promotions, same buyer sentence. One model hunted harder for
+promotions and broke through the floor price as well as the discount cap. A single
+-model report would have found the first hole and missed the second — and a
+merchant who tuned their integration against only that report would ship the gap.
+
+The two adapters are not interchangeable under the hood, and the differences are
+the kind that fail silently:
+
+- **Tool schemas** are `input_schema` here, not a nested `function` wrapper.
+- **`max_tokens` is mandatory**, unlike chat-completions.
+- **There is no JSON response mode**, so scenario generation asks for bare JSON
+  and leans on the existing tolerant extractor.
+- **Signed `thinking` blocks** come back alongside a tool call. Rebuilding the
+  assistant turn from our neutral message shape would silently drop them and throw
+  away the model's reasoning chain mid-purchase, so the adapter round-trips the
+  provider's own block list through an opaque `providerRaw` field.
+- **Tool results must merge into one user turn.** They arrive as separate `tool`
+  messages, and this API enforces strict role alternation — so the first time an
+  agent calls two tools at once, unmerged results break the conversation.
+- **`temperature` is rejected outright** by `claude-opus-5`. As with the Azure
+  reasoning deployments, the adapter reads the 400, drops the field, retries, and
+  remembers.
+
+Each of those is pinned by a wire-level test, because every one of them returns a
+plausible-looking 200 when it is subtly wrong.
+
+### Fixed repro or live agent — always labelled
+
+Every journey row says who chose the tool calls, because the two support very
+different claims:
+
+- **`fixed repro`** — a hand-written tool sequence. Identical on every run, which
+  is the only honest basis for a recall number. A regression test for a known
+  defect has to reproduce it the same way every time, or measured detection
+  becomes a function of the model's mood. The four transport perturbations are
+  labelled this way too: they route through an agent, but their steps are scripted
+  so the duplicate delivery or clock jump has something stable to act on.
+- **`live agent`** — a real model handed only the buyer's words and the tool
+  surface. This is where failures nobody anticipated show up.
+
+`/preflight` runs both by default. **Live agent only** hands all 12 regression
+goals — same buyer request, same target invariant, no scripted steps — to every
+configured model and reports what each actually does.
+
+The two halves genuinely disagree, which is the argument for keeping both. On one
+real run, `reg-05-duplicate-payment` was an `unsafe_violation` as a fixed repro —
+the scripted journey forces the duplicate delivery and the missing idempotency key
+lets a second payable order through — while both live models `passed` the same
+goal, because neither tried to pay twice. Drop the deterministic half and you stop
+detecting the defect; drop the live half and you never learn how a real agent
+behaves.
+
+### Inconclusive is a real outcome
+
+A live agent that exhausts its tool budget, or a model that errors mid-journey, is
+reported as **`inconclusive`**. Nothing rejected anything; the journey ran out of
+road. Folding that into "safely rejected" would let a stalled agent pass for a
+correct outcome, which is exactly the flattering accounting this tool exists to
+catch. Inconclusive journeys contribute nothing to coverage and are counted on
+their own line in every report.
+
+The agent is also told how many tool calls remain once it gets close to the limit.
+A reasoning model left to browse freely will happily spend eight calls comparing
+hampers and then get cut off mid-purchase — which reads as "the agent gave up"
+when really the harness pulled the plug.
 
 ---
 
@@ -609,14 +731,17 @@ src/lib/audit/                  Append-only hash-chained event log
 src/lib/policy/                 Policy schema + engine + 12 invariants
 src/lib/guard/                  AgentProof Guard
 src/lib/hamperhub/              The merchant under test (+ seeded defects)
-src/lib/agent/                  LLM adapters and the autonomous buyer agent
+src/lib/agent/                  LLM adapters (scripted, OpenAI, Anthropic) + agent
 src/lib/payments/               Provider interface, Razorpay adapter, fake
-src/lib/scenarios/              Regression, perturbation and generated scenarios
+src/lib/scenarios/              Regression, perturbation, live-agent and generated
 src/lib/runner/                 Journey execution, perturbation, concurrency
 src/lib/report/                 Readiness report, metrics, trace replay, explanation
 src/lib/db/                     Postgres schema, repository and queries
 src/lib/dashboard/              Server-side data layer for the dashboard
-src/app/                        Next.js dashboard (server components only)
+src/lib/dashboard/runStore.ts   Completed runs; in memory, mirrored to Postgres
+src/app/preflight/              Trigger a run and stream it (SSE)
+src/app/api/preflight/          Suite runner as a server-sent event stream
+src/app/                        Next.js dashboard (server components elsewhere)
 src/scripts/                    Runnable demos and database tooling
 scripts/dev-db.sh               Local Postgres for development
 tests/                          193 tests
@@ -639,19 +764,29 @@ Honest scope. What is built is listed above; these are the real gaps:
   Card payments were rejected there as international, which is an account
   configuration rather than an integration problem — worth knowing if you
   reproduce it.
-- **The real-LLM path is wired but lightly exercised.** The adapter, retries,
-  fallbacks and the narrator's fabrication guard are tested against stubs. Journeys
-  and generation have been run extensively on the deterministic scripted model, not
-  on a paid model at volume.
+- **The real-LLM path works but the numbers in this README come from the scripted
+  model.** Live runs against a real reasoning model have been verified end to end,
+  including a real Razorpay capture, but the measured table above is the
+  deterministic suite. Live-agent journeys are labelled as such in every report
+  precisely so the two are never conflated.
+- **Live-agent recall is not a stable measurement.** A live journey where the model
+  never reached checkout tells you nothing about the invariant it targeted; that is
+  why those runs are reported as `inconclusive` and why the deterministic suite
+  still exists alongside them.
+- **Two models is two, not a survey.** The per-model comparison shows that model
+  choice changes what an agent does to your checkout. It does not establish which
+  model is "safer" — that would need many runs per model, since a single live
+  journey is one sample from a distribution.
 - **Concurrency is single-process.** Interleaved journeys are exercised and cannot
   oversell, but reservation check-and-hold is synchronous within one Node process.
   A multi-process deployment would need a row lock or unique constraint.
 - **One merchant, one policy.** HamperHub is the only integration under test, so
   the Guard's independence from a specific commerce backend is a design property
   rather than a demonstrated one.
-- **Persistence is write-and-read-back, not a query surface.** Runs are stored and
-  verified, and the read queries exist, but the dashboard still executes a fresh
-  run per request rather than browsing history.
+- **Persistence is write-and-read-back, not yet a query surface.** Runs are stored
+  and verified, and the read queries exist, but the dashboard reads its in-process
+  cache. Restarting the server loses the run list even though the rows survive in
+  Postgres.
 - **Testing cannot prove absence of defects.** Eight seeded defects are detected;
   that is evidence the invariants work, not a guarantee the space is covered.
   Hence "readiness report", and hence the Guard stays active at runtime.
@@ -665,10 +800,14 @@ PAYMENT_ADAPTER=fake        # or "razorpay" with rzp_test_ credentials
 RAZORPAY_KEY_ID=            # must start with rzp_test_
 RAZORPAY_KEY_SECRET=
 
-LLM_ADAPTER=scripted        # deterministic; no API key needed
-LLM_API_KEY=                # required only for LLM_ADAPTER=openai
+LLM_ADAPTER=scripted        # scripted | openai | anthropic
+LLM_API_KEY=                # required for openai; anthropic falls back to it
 LLM_MODEL=                  # defaults to gpt-4o-mini
 LLM_BASE_URL=               # any OpenAI-compatible endpoint
+
+ANTHROPIC_MODEL=            # naming a deployment adds it to the driver pool
+ANTHROPIC_API_KEY=          # optional; falls back to LLM_API_KEY
+ANTHROPIC_BASE_URL=         # Messages API host, e.g. an Azure AI Foundry endpoint
 
 AGENTPROOF_SEED=1337        # reproducible demo runs
 

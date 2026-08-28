@@ -56,6 +56,14 @@ export interface GuardOptions {
   audit: AuditLog;
   /** Runtime mode still blocks; preflight mode additionally records findings. */
   mode?: "preflight" | "runtime";
+  /**
+   * Identity of the payment provider actually in use.
+   *
+   * The audit trail must never say "Razorpay" when the order was simulated
+   * offline. A reader has to be able to tell, from the trace alone, whether real
+   * money was ever in play.
+   */
+  paymentProvider?: { name: string; isReal: boolean };
 }
 
 /**
@@ -478,20 +486,29 @@ export class Guard {
     const attempt = await this.opts.service.authorizeCheckout(checkout.id);
     this.financialActionTaken = true;
 
-    this.audit("razorpay.order_created", {
-      toolName: "create_checkout",
-      quoteId: quote.id,
-      providerOrderId: attempt.providerOrderId,
-      decision: "allow",
-      reason: `Authorised ${formatMinor(attempt.amountMinor)} after ${
-        evaluation.evaluatedCount
-      } invariants passed`,
-      output: {
-        payment_attempt_id: attempt.id,
-        provider_order_id: attempt.providerOrderId,
-        amount: toMajor(attempt.amountMinor),
+    const provider = this.opts.paymentProvider;
+    const isRazorpay = provider?.isReal === true && provider.name === "razorpay";
+
+    this.audit(
+      isRazorpay ? "razorpay.order_created" : "payment.order_created",
+      {
+        toolName: "create_checkout",
+        quoteId: quote.id,
+        providerOrderId: attempt.providerOrderId,
+        decision: "allow",
+        reason: `Authorised ${formatMinor(attempt.amountMinor)} after ${
+          evaluation.evaluatedCount
+        } invariants passed`,
+        output: {
+          payment_attempt_id: attempt.id,
+          provider_order_id: attempt.providerOrderId,
+          amount: toMajor(attempt.amountMinor),
+          // Recorded explicitly so no reader has to infer it.
+          provider: provider?.name ?? "unknown",
+          provider_is_real: provider?.isReal ?? false,
+        },
       },
-    });
+    );
 
     return {
       ok: true,

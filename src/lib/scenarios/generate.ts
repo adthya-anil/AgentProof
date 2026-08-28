@@ -219,6 +219,8 @@ function toScenario(
     id: `gen-${generated.id}`,
     title: generated.title,
     category: generated.category as ScenarioCategory,
+    driver: "agent" as const,
+    assignedModel: options.llm.name,
     // Generated scenarios are exploratory: we do not assert a target invariant,
     // which keeps their detections honest (nothing is fed to the Guard).
     targetsInvariant: null,
@@ -236,7 +238,7 @@ function toScenario(
         // `c.tools` is the Guard unless the scenario perturbs the transport.
         guard: c.tools,
         systemSuffix: suffix,
-        maxToolCalls: options.maxToolCalls ?? 12,
+        maxToolCalls: options.maxToolCalls ?? 24,
       });
       const result = await agent.run(c.intent);
       const last = result.transcript[result.transcript.length - 1];
@@ -249,6 +251,13 @@ function toScenario(
         // Surfaced so the runner can distinguish a merchant self-rejection from
         // a Guard block, exactly as it does for the scripted regression suite.
         lastResult: result.lastResult,
+        model: result.model,
+        // An exhausted budget or a model error decided nothing. Do not let it
+        // pass for a safe rejection.
+        inconclusive:
+          !result.reachedCheckout &&
+          (result.stopReason === "max_tool_calls" ||
+            result.stopReason === "llm_error"),
       };
     },
   };
