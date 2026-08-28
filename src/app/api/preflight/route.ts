@@ -1,7 +1,13 @@
-import { describePool, llmFromEnv, llmPoolFromEnv } from "@/lib/agent/factory";
+import {
+  assignRoles,
+  describePool,
+  llmFromEnv,
+  llmPoolFromEnv,
+} from "@/lib/agent/factory";
 import { loadDotEnv } from "@/lib/core/env";
 import { toMajor } from "@/lib/core/money";
-import { recordRun } from "@/lib/dashboard/runStore";
+import { getLatestRun, recordRun } from "@/lib/dashboard/runStore";
+import { EMPTY_INTEL, intelFrom } from "@/lib/scenarios/intel.js";
 import { MutationSet } from "@/lib/hamperhub/mutations";
 import { razorpayFromEnv } from "@/lib/harness";
 import { loadPolicyFromFile } from "@/lib/policy/load";
@@ -31,6 +37,7 @@ export async function GET(request: Request): Promise<Response> {
     url.searchParams.get("variant") === "fixed" ? "fixed" : "vulnerable";
   const generatedCount = clamp(url.searchParams.get("generated"), 9, 0, 12);
   const mode = parseMode(url.searchParams.get("mode"));
+  const roleMode = url.searchParams.get("roles") === "split" ? "split" : "compare";
   // Comma-separated regression ids. Not surfaced in the UI, but it makes a
   // single live journey cheap to reproduce from a shell or a CI step.
   const liveGoals = (url.searchParams.get("liveGoals") ?? "")
@@ -109,6 +116,19 @@ export async function GET(request: Request): Promise<Response> {
           return;
         }
 
+        const { adversary, buyers } = assignRoles(pool, roleMode);
+
+        /**
+         * What the previous run revealed, handed to the adversary.
+         *
+         * Generation had always accepted this and never received it, so each run
+         * invented goals with no knowledge of where the shop was already weak or
+         * which rules nothing had reached. Feeding it back makes a second run aim at
+         * what survived the first instead of re-rolling the dice.
+         */
+        const previous = await getLatestRun(variant);
+        const intel = previous ? intelFrom(previous.suite) : EMPTY_INTEL;
+
         const policy = loadPolicyFromFile();
         // Describes what the journeys will really use, not what is merely
         // configured in the environment.
@@ -123,13 +143,23 @@ export async function GET(request: Request): Promise<Response> {
           model: llm.name,
           modelIsReal: llm.isReal,
           pool: pool.map((m) => m.name),
+          roles: roleMode,
+          adversaryModel: adversary?.name ?? null,
+          buyerModels: buyers.map((m) => m.name),
+          intel: {
+            tripped: intel.tripped.length,
+            neverExercised: intel.neverExercised.length,
+            survived: intel.survived.length,
+          },
           paymentAdapter,
         });
 
         send({ kind: "phase", note: "Generating scenarios" });
         const assembled = await assembleSuite({
           llm,
-          llms: pool,
+          llms: buyers.length > 0 ? buyers : pool,
+          ...(adversary ? { adversary } : {}),
+          intel,
           policy,
           generatedCount,
           mode,

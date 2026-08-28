@@ -155,3 +155,28 @@ export function requireLlmPool(): LLM[] {
 export function describePool(pool: readonly LLM[]): string {
   return pool.map((llm) => llm.name).join(" + ");
 }
+
+
+/**
+ * Splits a pool into an adversary and buyers.
+ *
+ * `compare` makes every model a buyer, which is what the pool did before roles
+ * existed. `split` promotes the last model to adversary — the last, because it is the
+ * opt-in second one (`ANTHROPIC_MODEL`), so adding a model changes what the new model
+ * does rather than silently reassigning the one already in use.
+ *
+ * With a single model there is nothing to divide, so it does both jobs and `split`
+ * behaves exactly like `compare`. Reported either way, so a reader is never left
+ * inferring who did what.
+ */
+export function assignRoles(
+  pool: readonly LLM[],
+  mode: "compare" | "split",
+): { adversary: LLM | undefined; buyers: LLM[] } {
+  if (pool.length === 0) return { adversary: undefined, buyers: [] };
+  if (mode === "compare" || pool.length === 1) {
+    return { adversary: undefined, buyers: [...pool] };
+  }
+  const adversary = pool[pool.length - 1]!;
+  return { adversary, buyers: pool.slice(0, -1) };
+}

@@ -330,6 +330,53 @@ the kind that fail silently:
 Each of those is pinned by a wire-level test, because every one of them returns a
 plausible-looking 200 when it is subtly wrong.
 
+### Two models, two jobs
+
+A second configured model can do more than duplicate the first. The **Models** control
+on `/preflight` chooses:
+
+| Mode | What each model does |
+|---|---|
+| **Both shop — compare them** | Every model attempts every goal as a buyer |
+| **One invents, one shops** | The last model becomes the *adversary* and writes the goals; the rest execute them |
+
+Neither is strictly better, so both stay:
+
+- **Compare** answers *"does model choice change what happens to my checkout?"* — and
+  it does. Given one identical request, `gpt-5.6-sol` reached a 7.75% effective
+  discount and tripped `INV-DISCOUNT-CAP`; `claude-opus-5` stacked four components to
+  14.23% and breached the floor price as well. A single-model report finds the first
+  hole and misses the second.
+- **Split** answers *"what can a model think up that I did not?"* — and it is cheaper,
+  since goals are attempted once rather than once per model.
+
+The adversary is the *last* model in the pool, so adding `ANTHROPIC_MODEL` changes what
+the new model does rather than silently reassigning the one already in use. With one
+model configured there is nothing to divide, and split behaves exactly like compare.
+
+### The adversary is told what survived
+
+Generation used to be blind. The prompt had always accepted a `priorFailures` list and
+no caller ever passed one, so every run invented goals with no knowledge of where the
+shop was already weak. It produced variety, not pressure.
+
+It now receives three signals from the previous run:
+
+- **Rules already broken** — invent harder variants; the shop is demonstrably weak
+  there. This is the path from 8.7% to 11.44%.
+- **Rules nothing has reached** — untested, *not* safe, and the most valuable thing to
+  aim at.
+- **Requests handled cleanly** — escalate rather than repeat.
+
+The difference is visible. Blind, the adversary spent a slot on an ordinary vegan
+birthday hamper. Informed, it generated no happy paths at all and produced
+`gen-split-order-to-dodge-transaction-cap` — splitting an order to evade the ₹5,000
+per-transaction limit — plus a journey that opens *"that quote you showed me about
+fifteen minutes ago"*, aimed squarely at `INV-QUOTE-EXPIRY`.
+
+That is generation earning its place: an attack a developer would not have written
+down, aimed at a rule the run before it had already bent.
+
 ### Fixed repro or live agent — always labelled
 
 Every journey row says who chose the tool calls, because the two support very

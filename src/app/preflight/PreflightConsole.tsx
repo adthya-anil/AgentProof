@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 type Mode = "deterministic" | "agent" | "both";
 type Payments = "simulated" | "razorpay";
+type Roles = "compare" | "split";
 type Driver = "deterministic" | "agent";
 
 interface ModelBreakdown {
@@ -76,6 +77,12 @@ export default function PreflightConsole({
    * not the default but that the report says which one actually ran.
    */
   const [payments, setPayments] = useState<Payments>("simulated");
+  /**
+   * Compare by default, because it is the mode that produced a finding: the same
+   * request reached a 7.75% discount on one model and 14.23% plus a floor-price
+   * breach on the other. Split is the cheaper, more pointed run.
+   */
+  const [roles, setRoles] = useState<Roles>("compare");
   const [generated, setGenerated] = useState(3);
   const [running, setRunning] = useState(false);
   const [phase, setPhase] = useState<string | null>(null);
@@ -83,6 +90,9 @@ export default function PreflightConsole({
     model: string;
     modelIsReal: boolean;
     pool: string[];
+    /** Set when a model was given the adversary role instead of shopping. */
+    adversaryModel: string | null;
+    buyerModels: string[];
     paymentAdapter: string;
   } | null>(null);
   const [composition, setComposition] = useState<{
@@ -110,6 +120,7 @@ export default function PreflightConsole({
       variant,
       mode,
       payments,
+      roles,
       generated: String(generated),
     });
     const source = new EventSource(`/api/preflight?${params.toString()}`);
@@ -124,6 +135,8 @@ export default function PreflightConsole({
           model: e.model as string,
           modelIsReal: e.modelIsReal as boolean,
           pool: (e.pool as string[]) ?? [],
+          adversaryModel: (e.adversaryModel as string | null) ?? null,
+          buyerModels: (e.buyerModels as string[]) ?? [],
           paymentAdapter: e.paymentAdapter as string,
         });
       } else if (kind === "phase") {
@@ -187,7 +200,7 @@ export default function PreflightConsole({
       setRunning(false);
       source.close();
     };
-  }, [variant, mode, payments, generated]);
+  }, [variant, mode, payments, roles, generated]);
 
   const stop = useCallback(() => {
     sourceRef.current?.close();
@@ -256,6 +269,18 @@ export default function PreflightConsole({
           </label>
 
           <label className="check">
+            Models
+            <select
+              value={roles}
+              onChange={(e) => setRoles(e.target.value as Roles)}
+              disabled={running}
+            >
+              <option value="compare">Both shop — compare them</option>
+              <option value="split">One invents, one shops</option>
+            </select>
+          </label>
+
+          <label className="check">
             Payments
             <select
               value={payments}
@@ -295,6 +320,12 @@ export default function PreflightConsole({
               <span>Integration</span>
               {variant}
             </div>
+            {meta.adversaryModel && (
+              <div>
+                <span>Adversary</span>
+                <span className="mono">{meta.adversaryModel}</span>
+              </div>
+            )}
             {composition && (
               <div>
                 <span>Composition</span>
