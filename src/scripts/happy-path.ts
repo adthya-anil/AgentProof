@@ -117,7 +117,7 @@ async function main(): Promise<void> {
   console.log(`Payment ${verified.status}, verified=${verified.verified}`);
 
   // 7. Fulfil — only reachable with a verified captured payment.
-  const fulfilled = guard.fulfillOrder(payable.checkout_intent_id);
+  const fulfilled = await guard.fulfillOrder(payable.checkout_intent_id);
   if (!fulfilled.ok) throw new Error(`fulfilment blocked: ${fulfilled.reason}`);
 
   const coffee = env.state.requireInventory("p-coffee-arabica");

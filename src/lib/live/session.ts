@@ -351,7 +351,7 @@ export async function recheckPayment(
 
   // Only worth attempting once the provider says the money is actually there.
   if (attempt?.verified) {
-    const result = env.guard.fulfillOrder(session.checkoutIntentId);
+    const result = await env.guard.fulfillOrder(session.checkoutIntentId);
     fulfilled = result.ok;
     if (!result.ok) fulfilmentNote = result.reason;
   } else {

@@ -28,7 +28,7 @@ an API key or network access unless you explicitly opt in.
 
 ```bash
 npm install
-npm test                    # 388 tests (2 need DATABASE_URL)
+npm test                    # 486 tests (2 need DATABASE_URL)
 npm run typecheck
 
 npm run demo:happy          # successful ₹1,399 transaction
@@ -239,6 +239,111 @@ And a drift test greps each invariant's source: if the code reads `.priceVersion
 without declaring `product.priceVersion`, the test names the file and the missing
 declaration. Verified by deliberately removing a declaration and confirming the
 failure, because a guard that cannot fail is decoration.
+
+---
+
+## Running against someone else's catalogue
+
+The invariants are written against the spec's entity model. No merchant's API
+looks like that: the same price is `price_cents`, `variants[0].price` as a
+decimal string, or `priceRange.minVariantPrice.amount` depending on whose
+storefront you are pointed at. A TypeScript adapter per merchant is where this
+would naturally end up, and was rejected — an adapter is code, code needs a
+reviewer who knows both the merchant's API and this engine's assumptions, and the
+failure mode is a silent mis-mapping that makes every later report wrong.
+
+So a mapping is data:
+
+```yaml
+merchant: foreign
+transport:
+  kind: rest
+  baseUrl: https://foreign.test
+  productPath: /v2/catalogue/{id}
+  batch: { path: /v2/catalogue, idsParam: skus, root: data.items }
+product:
+  id: sku
+  name: display_name
+  price: { path: pricing.retail, unit: decimalString }
+  allergens: { path: dietary.contains, whenMissing: unknown, splitOn: "," }
+  vegan: { path: dietary.plant_based, whenMissing: unknown }
+inventory: { available: warehouse.on_hand }
+derive: { priceVersion: observed, inventoryVersion: observed }
+```
+
+**Capabilities are derived from the mapping, never declared beside it.** A
+merchant cannot claim `product.priceVersion` without saying where it comes from,
+so the claim and the evidence for it are the same line and cannot drift apart —
+which a hand-written `capabilities: [...]` list would have invited.
+
+### Three things the DSL refuses to guess
+
+**Money units.** `unit` is required with no default. `1299` might be ₹1,299.00 or
+₹12.99 and nothing in the value says which. `decimalString` exists as its own
+unit because `parseFloat("12.99") * 100` is `1298.9999999999998`, and a price
+that cannot be read raises rather than defaulting to zero — a zero would flow
+into a quote, satisfy the floor-price rule for the wrong reason, and let an agent
+buy a hamper for nothing.
+
+**Missing versus unknown.** `whenMissing` is required on every optional field. An
+allergen list absent because the merchant does not track allergens is not one
+absent because the product has none, and collapsing the first into the second is
+how an allergic buyer gets sold a peanut.
+
+**Stock as a boolean.** `inStock: true` cannot answer "are there four left", and
+mapping it to `1` would turn "some available" into "exactly enough". The adapter
+raises and tells you to leave the field unmapped, which withholds the inventory
+rule — an honest gap instead of a fabricated count.
+
+Paths are dotted, not JSONPath. Wildcards and filters would let a mapping express
+"the cheapest variant", which silently starts reading a different variant when a
+price moves, so the thing quoted and the thing checked diverge with no error
+anywhere.
+
+### One catalogue, not two
+
+The first version handed the invariants the remote snapshot directly. It produced
+a **false violation against a correct integration**, and the message contained the
+evidence of its own wrongness:
+
+```
+Catalog prices changed after this quote was priced.
+  Arabica Single-Origin Coffee 250g: quoted ₹599.00 (v1)
+  but current price is ₹599.00 (v613847692)
+```
+
+The quote was priced from the local catalogue and carried its `priceVersion`; the
+checkpoint read the merchant separately and produced a version from the
+merchant's own data. The two numbers were never comparable. So the merchant is
+now *synchronised into* one catalogue rather than presented as a rival view, and
+the sync runs through `setPrice`/`setStock` so a merchant-side change reaches the
+audit trail instead of a reader seeing "prices changed" with no entry saying what.
+
+That also made versioning better rather than merely correct. The engine keeps its
+own monotonic counter, bumped when the merchant answers with a different price —
+so ₹599 → ₹649 → ₹599 is version 3, a move-and-revert that a content hash of the
+price could not express. **No merchant version field is required for
+INV-PRICE-BINDING to work.** The remaining limit, stated because it is otherwise
+invisible: the engine only sees changes between its own reads, so a price that
+moves and returns *between two checkpoints* is never observed. Native and
+`observed` are therefore not equivalent, and are reported apart.
+
+### Reads are batched
+
+Six line items across five checkpoints is thirty product reads. A mapping that
+declares a batch endpoint does one request per checkpoint; without one the adapter
+fetches concurrently, never in a sequential loop. Batch rows are matched back by
+the mapping's own id path rather than zipped by position — a batch endpoint is
+under no obligation to answer in the order asked, and zipping would attribute one
+product's price to another, which is a wrong price delivered with complete
+confidence.
+
+Verified end to end: a full journey through the real Guard against a REST merchant
+whose ids are `sku`, prices are decimal strings under `pricing.retail`, stock is
+`warehouse.on_hand`, and which has no version field anywhere. The clean journey
+passes with no violations, a mid-journey re-price to ₹649 is caught by
+INV-PRICE-BINDING, the truffle's genuinely-unknown allergen data survives the
+translation as `null`, and a three-item basket costs one HTTP call per checkpoint.
 
 ---
 
@@ -942,7 +1047,7 @@ src/app/api/preflight/          Suite runner as a server-sent event stream
 src/app/                        Next.js dashboard (server components elsewhere)
 src/scripts/                    Runnable demos and database tooling
 scripts/dev-db.sh               Local Postgres for development
-tests/                          388 tests
+tests/                          486 tests
 ```
 
 Money is an integer count of paise throughout. Float rupees are banned: an
