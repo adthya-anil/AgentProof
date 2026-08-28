@@ -28,7 +28,7 @@ an API key or network access unless you explicitly opt in.
 
 ```bash
 npm install
-npm test                    # 335 tests
+npm test                    # 356 tests
 npm run typecheck
 
 npm run demo:happy          # successful ₹1,399 transaction
@@ -603,10 +603,18 @@ npm run db:status
 A real run, stored:
 
 ```
-  merchants  1     policies  1        policy_rules      12
-  products  17     suites    2        test_scenarios    25
-  test_runs 50     violations 30      tool_executions  204
-                                      audit_events     653
+  merchants               1
+  policies                1
+  policy_rules           12
+  commerce_tools          6
+  products               17
+  inventory_records      17
+  test_scenarios         25
+  suites                  2
+  test_runs              50
+  tool_executions       204
+  violations             30
+  audit_events          757
 
 Persisted hash chains: 50 checked
   ✓ all verify
@@ -857,7 +865,7 @@ src/app/api/preflight/          Suite runner as a server-sent event stream
 src/app/                        Next.js dashboard (server components elsewhere)
 src/scripts/                    Runnable demos and database tooling
 scripts/dev-db.sh               Local Postgres for development
-tests/                          335 tests
+tests/                          356 tests
 ```
 
 Money is an integer count of paise throughout. Float rupees are banned: an
@@ -896,10 +904,15 @@ Honest scope. What is built is listed above; these are the real gaps:
 - **One merchant, one policy.** HamperHub is the only integration under test, so
   the Guard's independence from a specific commerce backend is a design property
   rather than a demonstrated one.
-- **Persistence is write-and-read-back, not yet a query surface.** Runs are stored
-  and verified, and the read queries exist, but the dashboard reads its in-process
-  cache. Restarting the server loses the run list even though the rows survive in
-  Postgres.
+- **Persistence stores two things, for two jobs.** The normalised tables are the
+  analytical surface — query which model tripped which invariant, or verify every
+  stored hash chain in SQL. A run *also* stores an exact snapshot, because eight
+  `JourneyResult` fields have no column and a report rebuilt from the tables alone
+  would be quietly poorer than the one produced. With `DATABASE_URL` set, a run
+  survives a restart; without it, runs live in memory for the session.
+- **A stored run is the latest per integration, not a browsable history.** The
+  dashboard hydrates the most recent run for each variant. Older runs are queryable
+  in SQL and listed on `/preflight`, but there is no UI for opening one.
 - **Testing cannot prove absence of defects.** Eight seeded defects are detected;
   that is evidence the invariants work, not a guarantee the space is covered.
   Hence "readiness report", and hence the Guard stays active at runtime.

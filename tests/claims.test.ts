@@ -343,3 +343,58 @@ describe("money at risk means money that was at risk", () => {
     expect(journey.firedInvariants).toContain("INV-IDEMPOTENCY");
   });
 });
+
+describe("the limitations section describes real limitations", () => {
+  /**
+   * A stale limitation is the same failure as a stale feature claim, pointing the
+   * other way: it understates the product and tells a reader it is weaker than it is.
+   *
+   * This one survived a session in which it was fixed, because a `str.replace` that
+   * matched nothing failed silently — so the README went on saying runs are lost on
+   * restart after they had stopped being lost. Prose cannot be diffed against code in
+   * general, but a specific retired claim can be pinned so it cannot come back.
+   */
+  it("does not claim a restart loses stored runs, now that hydration exists", async () => {
+    // If the hydration query exists, the claim it contradicts must be gone.
+    const queries = await import("../src/lib/db/queries.js");
+    expect(typeof queries.latestSuiteFor).toBe("function");
+
+    expect(README).not.toMatch(/Restarting the server loses the run list/i);
+    expect(README).not.toMatch(/the dashboard reads its in-process cache/i);
+  });
+
+  it("still admits the limitations that are genuinely still true", () => {
+    // Guards against the opposite error: quietly deleting an inconvenient caveat.
+    // Each of these remains true and must stay stated.
+    expect(README).toMatch(/Concurrency is single-process/);
+    expect(README).toMatch(/One merchant, one policy/);
+    expect(README).toMatch(/Testing cannot prove absence of defects/);
+    expect(README).toMatch(/Two models is two, not a survey/);
+    expect(README).toMatch(/Live-agent recall is not a stable measurement/);
+  });
+
+  it("keeps the quoted row counts consistent with the schema", () => {
+    // The persistence sample quotes per-table counts. The tables it names must at
+    // least exist, or the sample is describing a schema that is gone.
+    const schema = readFileSync("src/lib/db/schema.sql", "utf8");
+    for (const table of [
+      "merchants",
+      "policies",
+      "policy_rules",
+      "commerce_tools",
+      "products",
+      "inventory_records",
+      "test_scenarios",
+      "suites",
+      "test_runs",
+      "tool_executions",
+      "violations",
+      "audit_events",
+    ]) {
+      expect(README, `README quotes ${table}`).toContain(table);
+      expect(schema, `schema defines ${table}`).toMatch(
+        new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`),
+      );
+    }
+  });
+});
