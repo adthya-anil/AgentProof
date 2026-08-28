@@ -56,8 +56,34 @@ jobs:
       - name: Demo — seeded defect detection
         run: npm run demo:defects
 
+      # The demo that proves five buyers cannot oversell three units. It was the one
+      # end-to-end check absent from CI, which is a strange thing to omit given the
+      # claim it defends — it asserts its own outcome and fails if nobody succeeds,
+      # since a Guard that blocks everyone trivially never oversells.
+      - name: Demo — concurrent buyers cannot oversell
+        run: npm run demo:concurrency
+
       - name: Demo — preflight, fix-and-rerun, mutation scorecard
         run: npm run demo:preflight
 
       - name: Demo — Razorpay path is safe when unconfigured
         run: npm run demo:razorpay
+
+      # The second merchant over a real socket.
+      #
+      # Nordwell is covered by 19 in-process tests that call the route handler
+      # directly, and those are the ones that assert behaviour. This step exists for
+      # the one thing they cannot check: that the traffic actually works as HTTP —
+      # a real request, a real GraphQL response, real JSON in between. The README
+      # claims the adapter reaches the merchant the way a third party would, and this
+      # is what keeps that claim honest.
+      - name: Demo — second merchant over real HTTP
+        run: |
+          npx next start -p 3000 > /tmp/next.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:3000/policy -o /dev/null && break
+            sleep 1
+          done
+          npm run demo:merchant
+        env:
+          AGENTPROOF_BASE_URL: http://127.0.0.1:3000

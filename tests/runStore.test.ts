@@ -3,6 +3,7 @@ import { MutationSet } from "../src/lib/hamperhub/mutations.js";
 import { loadPolicyFromFile } from "../src/lib/policy/load.js";
 import { runSuite } from "../src/lib/runner/run.js";
 import { REGRESSION_SCENARIOS } from "../src/lib/scenarios/regression.js";
+import type { IntegrationVariant } from "../src/lib/dashboard/data.js";
 import {
   clearRuns,
   getCachedRun,
@@ -70,9 +71,19 @@ describe("reading a run back", () => {
   });
 
   it("reports no stored run rather than throwing when nothing exists", async () => {
-    // Covers the no-database case too: persistence is optional, so an absent or
-    // unreachable database must render an empty dashboard, not an error page.
-    expect(await getLatestRun("fixed")).toBeNull();
+    /**
+     * Covers the no-database case too: persistence is optional, so an absent or
+     * unreachable database must render an empty dashboard, not an error page.
+     *
+     * Asked about a variant nothing ever records, rather than "fixed". The previous
+     * version relied on no `fixed` run existing anywhere, which is true of this file and
+     * false of the database it shares — one `demo:preflight` persists both variants, and
+     * afterwards this test failed while the code it covers was perfectly correct. A test
+     * whose result depends on what else has touched the database is not testing the
+     * thing it names.
+     */
+    const neverRecorded = "no-such-variant" as IntegrationVariant;
+    expect(await getLatestRun(neverRecorded)).toBeNull();
   });
 
   it("distinguishes a cache miss from an absent run", async () => {
