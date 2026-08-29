@@ -110,9 +110,18 @@ export default async function MerchantsPage({
         <h2>Two merchants, one policy</h2>
         <p className="lead">
           HamperHub is built to the entity model the invariants were written against:
-          products carry a price version, inventory records carry a version, allergens
-          are structured. Almost no real catalogue does. Nordwell is the counter-example
-          — and the rules run against it unchanged.
+          products carry a price version, inventory records carry a version, allergens are
+          structured. Almost no real catalogue does. Nordwell is the counter-example — a
+          separate GraphQL service with its own data model, and the rules run against it
+          unchanged.
+        </p>
+        <p className="meta">
+          Reached over real HTTP: a TCP connection, a POST, a GraphQL query, and GraphQL
+          error semantics — stop the server and the catalogue becomes unreadable, because
+          there is no in-process shortcut. It is <em>not</em> a third party&rsquo;s
+          infrastructure, though: same codebase, on localhost, with no auth, rate limits,
+          pagination or latency. It exercises the transport, not the realities of
+          integrating with someone else&rsquo;s systems.
         </p>
         <table>
           <thead>
@@ -147,12 +156,18 @@ export default async function MerchantsPage({
         <p className="lead">
           Both merchants are ours. Neither has the pagination, rate limits, partial
           failures or eventual consistency of a real storefront, and there is still one
-          policy file. What running against Nordwell did prove is narrower and real: it
-          found two bugs no unit test had, because the fixtures had been written from the
-          same assumptions as the code — a tag list read as not-vegan, which would have
-          made the safety rule reject a correct integration, and a re-price that never
-          happened because the demo was mutating its own memory rather than the
-          merchant&rsquo;s.
+          policy file. The twelve deterministic regression scenarios also stay on
+          HamperHub — they name exact products on purpose, and generalising them to
+          &ldquo;something cheap&rdquo; would destroy the precision that makes them a
+          regression floor. What ports is the agent-driven half, which never named a
+          product.
+        </p>
+        <p className="meta">
+          What running against Nordwell did prove is narrower and real: it found two bugs
+          no unit test had, because the fixtures had been written from the same assumptions
+          as the code — a tag list read as not-vegan, which would have made the safety rule
+          reject a correct integration, and a re-price that never happened because the demo
+          was mutating its own memory rather than the merchant&rsquo;s.
         </p>
       </div>
     </>
