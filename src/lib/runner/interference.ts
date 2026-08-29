@@ -39,8 +39,31 @@ export class InterferingToolCaller implements ToolCaller {
     // failed call would change the world in response to something that did not
     // happen.
     if (!this.fired && name === this.plan.afterTool && result.ok) {
-      this.fired = true;
-      this.plan.apply(this.env);
+      /**
+       * Awaited, and only marked as fired once it has actually landed.
+       *
+       * `apply` became async when perturbing a mapped merchant became a network write, and
+       * this call was left un-awaited. The consequences were both subtle and severe: the
+       * write raced the agent's very next tool call, so a price rise sometimes reached the
+       * merchant before checkout and sometimes did not, and the same scenario alternated
+       * between catching a violation and reporting a clean pass with nothing to show for it.
+       * An intermittent test that reports success when it loses the race is worse than one
+       * that fails, because the failure looks like a result.
+       *
+       * `fired` moves after the await for the same reason: a write that did not happen must
+       * not leave the journey claiming its fault was applied.
+       */
+      try {
+        this.effect = await describeEffect(this.env, () => this.plan.apply(this.env));
+        this.fired = true;
+      } catch (error) {
+        /**
+         * A merchant that cannot be perturbed is an ordinary fact about a third-party
+         * catalogue, not a broken harness. Caught so the journey reports that its fault
+         * never fired — which the runner turns into `inconclusive` — rather than `errored`.
+         */
+        this.failure = error instanceof Error ? error.message : String(error);
+      }
     }
 
     return result;
