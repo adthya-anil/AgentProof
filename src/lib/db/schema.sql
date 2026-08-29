@@ -391,3 +391,15 @@ CREATE TABLE IF NOT EXISTS payable_order_claims (
   owner_id    TEXT NOT NULL,
   claimed_at  TIMESTAMPTZ NOT NULL
 );
+
+
+-- Which model held the adversary role, when roles were split.
+--
+-- A column rather than a field inside the snapshot, because the report *branches* on it:
+-- with an adversary, the per-model table is a breakdown by role and says so; without one it
+-- claims every goal was attempted by every model. Nothing persisted it, so every run read
+-- back from here looked like a compare run, and a split run — one buyer with fifteen
+-- journeys, one adversary with three, on disjoint scenarios — printed "every live goal was
+-- attempted by each model" above a table that plainly disproved it. The reader was invited
+-- to read a role difference as a safety difference.
+ALTER TABLE suites ADD COLUMN IF NOT EXISTS adversary_model TEXT;

@@ -12,6 +12,10 @@ import { MutationSet } from "@/lib/hamperhub/mutations";
 import { razorpayFromEnv } from "@/lib/harness";
 import { loadPolicyFromFile } from "@/lib/policy/load";
 import { runSuite } from "@/lib/runner/run";
+import {
+  describeInconclusive,
+  inconclusiveBreakdown,
+} from "@/lib/report/inconclusive";
 import { assembleSuite, type SuiteMode } from "@/lib/scenarios/index";
 
 /**
@@ -282,7 +286,16 @@ export async function GET(request: Request): Promise<Response> {
           byModel: suite.byModel,
           errored: suite.errored,
           escapes: suite.moneyCriticalEscapes,
-          moneyAtRisk: toMajor(suite.moneyAtRiskMinor),
+          journeys: suite.journeys.length,
+          moneyAtRisk: toMajor(suite.moneyPreventedMinor),
+          moneyNotPrevented:
+            suite.moneyNotPreventedMinor > 0
+              ? toMajor(suite.moneyNotPreventedMinor)
+              : null,
+          decidedJourneys: suite.decidedJourneys,
+          inconclusiveNote: describeInconclusive(
+            inconclusiveBreakdown(suite.journeys),
+          ),
           durationMs: suite.durationMs,
           metrics: suite.metrics,
         });

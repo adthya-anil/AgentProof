@@ -2,6 +2,10 @@ import Link from "next/link";
 import { formatMinor } from "@/lib/core/money";
 import { getSuiteView, type IntegrationVariant } from "@/lib/dashboard/data";
 import {
+  describeInconclusive,
+  inconclusiveBreakdown,
+} from "@/lib/report/inconclusive";
+import {
   ChainStatus,
   DispositionBadge,
   DriverBadge,
@@ -38,6 +42,9 @@ export default async function RunSummaryPage({
     );
   }
   const { suite, info } = view;
+  const inconclusiveNote = describeInconclusive(
+    inconclusiveBreakdown(suite.journeys),
+  );
 
   const categories = new Map<string, { total: number; unsafe: number }>();
   for (const journey of suite.journeys) {
@@ -123,17 +130,38 @@ export default async function RunSummaryPage({
             <div className="n">{suite.inconclusive}</div>
             <div className="k">Inconclusive</div>
           </div>
+          {/*
+            Two stats, because one could not be labelled honestly. An `unsafe_violation`
+            is a journey the Guard did not stop, so its money was never prevented —
+            summing both and calling the total "prevented" claimed credit for the
+            failures, and in one seeded-defect run 31% of the headline figure was money
+            that got through. The second box only appears when there is something to
+            admit.
+          */}
           <div className="stat info">
-            <div className="n">{formatMinor(suite.moneyAtRiskMinor)}</div>
+            <div className="n">{formatMinor(suite.moneyPreventedMinor)}</div>
             <div className="k">At risk, prevented</div>
           </div>
+          {suite.moneyNotPreventedMinor > 0 && (
+            <div className="stat bad">
+              <div className="n">{formatMinor(suite.moneyNotPreventedMinor)}</div>
+              <div className="k">At risk, not prevented</div>
+            </div>
+          )}
         </div>
-        {suite.inconclusive > 0 && (
+        {/*
+          The number the verdict actually turns on. READY and INCONCLUSIVE differ only
+          here, and a reader who cannot see it cannot check the conclusion.
+        */}
+        <p className="note" style={{ marginBottom: 0 }}>
+          {suite.decidedJourneys} of {suite.journeys.length} journeys put at least one
+          invariant to work, which is what the readiness verdict is judged on. A run
+          where fewer than half do is reported <strong>INCONCLUSIVE</strong> rather than
+          ready, however clean it looks.
+        </p>
+        {inconclusiveNote && (
           <p className="note" style={{ marginBottom: 0 }}>
-            Inconclusive journeys are live-agent runs that ended without anything
-            deciding them — an exhausted tool budget or a model failure. They are
-            counted separately rather than as safe rejections, because they
-            verified nothing.
+            {inconclusiveNote}
           </p>
         )}
       </div>
