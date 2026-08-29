@@ -243,6 +243,23 @@ export const NORDWELL_MAPPING = {
   },
   // No version fields exist, so the engine keeps its own counters by observation.
   derive: { priceVersion: "observed", inventoryVersion: "observed" },
+  /**
+   * Nordwell lets its own prices and stock be moved.
+   *
+   * A real third-party catalogue almost certainly would not, and that is the point of
+   * declaring it rather than assuming it: without this block the state-perturbation
+   * journeys report that they never ran, instead of appearing to pass.
+   */
+  admin: {
+    setPrice: {
+      mutation:
+        "mutation($id: ID!, $amount: String!) { setPrice(id: $id, amount: $amount) { id } }",
+    },
+    setStock: {
+      mutation:
+        "mutation($id: ID!, $quantity: Int!) { setStock(id: $id, quantity: $quantity) { id } }",
+    },
+  },
   // Nordwell has no reservation concept. Claiming otherwise would leave the inventory
   // rule comparing a hold that cannot exist.
   supportsReservations: false,

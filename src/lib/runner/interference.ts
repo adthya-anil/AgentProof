@@ -19,6 +19,7 @@ import type { Interference } from "../scenarios/types.js";
  */
 export class InterferingToolCaller implements ToolCaller {
   private fired = false;
+  private failure: string | null = null;
 
   constructor(
     private readonly inner: ToolCaller,
@@ -46,5 +47,16 @@ export class InterferingToolCaller implements ToolCaller {
   /** True when the change was actually applied. Drives the honest verdict. */
   applied(): boolean {
     return this.fired;
+  }
+
+  /**
+   * Why the change could not be applied, when it could not.
+   *
+   * Reported so "this journey did not exercise its target invariant" can say whether the
+   * agent never reached the trigger or the merchant refused to be perturbed — two very
+   * different facts that otherwise look identical in a report.
+   */
+  failureReason(): string | null {
+    return this.failure;
   }
 }

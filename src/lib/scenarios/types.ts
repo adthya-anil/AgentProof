@@ -66,7 +66,13 @@ export interface Interference {
   afterTool: ToolName;
   /** Shown in the journey note, so a reader knows what changed and when. */
   label: string;
-  apply(env: Environment): void;
+  /**
+   * May be async, because perturbing a mapped merchant is a network write.
+   *
+   * Against the in-process merchant this stays synchronous; against a mapped one the
+   * change has to happen at the merchant or the next checkpoint's sync reverts it.
+   */
+  apply(env: Environment): void | Promise<void>;
 }
 
 export interface ScenarioIntent {
