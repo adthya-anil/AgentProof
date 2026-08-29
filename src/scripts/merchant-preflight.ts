@@ -106,14 +106,30 @@ async function main(): Promise<void> {
    * is the one family that genuinely cannot port: they name exact products and earn their
    * keep as precise sequences against a known catalogue.
    */
-  const { adversary } = assignRoles(pool, "split");
+  /**
+   * Buyers shop; the adversary writes. Passing the whole pool broke that.
+   *
+   * `assignRoles` already separates them, and handing `llms: pool` to the live half
+   * ignored it — the adversary drove seven buyer journeys on top of designing the goals,
+   * which is precisely the duplication having two models is meant to replace. The main
+   * preflight route got this right; this script did not.
+   */
+  const { adversary, buyers } = assignRoles(pool, "split");
   const composed = await assembleSuite({
     mode: "agent",
     llm: pool[0]!,
-    llms: pool,
+    llms: buyers.length > 0 ? buyers : pool,
     ...(adversary ? { adversary } : {}),
     policy: loadPolicyFromFile(),
     maxToolCalls: 24,
+    /**
+     * Five, not the default nine, to keep the suite at twenty journeys.
+     *
+     * 4 perturbation + 11 live + 5 generated = 20. A run is only worth what someone will
+     * wait for: at a minute or two of real model calls per journey, a suite that takes
+     * half an hour gets skipped, and a skipped suite detects nothing.
+     */
+    generatedCount: 5,
   });
   const scenarios = composed.scenarios;
 
@@ -132,12 +148,26 @@ async function main(): Promise<void> {
    * else's. Running only the fixed variant produces a clean bill of health with nothing
    * to compare it to, and a preflight whose verdict cannot move is not a verdict.
    */
+  /**
+   * One variant by default, both only when asked.
+   *
+   * The question a mapped merchant poses is "is this integration safe against this shop",
+   * which one run answers. The second variant answers a different question — does our own
+   * detector still work — and HamperHub already answers that far more cheaply, with
+   * twelve deterministic reproductions instead of twenty live journeys. Running both
+   * doubled the wall clock to prove something already proven elsewhere.
+   */
+  const variants = process.env.AGENTPROOF_COMPARE_VARIANTS === "1"
+    ? (["vulnerable", "fixed"] as const)
+    : (["fixed"] as const);
+
   console.log(
-    `\n  Running ${scenarios.length} live-agent journeys per variant. This takes minutes.\n`,
+    `\n  Running ${scenarios.length} live-agent journeys` +
+      `${variants.length > 1 ? " per variant" : ""}. This takes minutes.\n`,
   );
 
   const results: Array<{ variant: string; suite: Awaited<ReturnType<typeof runSuite>> }> = [];
-  for (const variant of ["vulnerable", "fixed"] as const) {
+  for (const variant of variants) {
     console.log(`  ── ${variant.toUpperCase()} integration, fronting ${schema.label}`);
     const suite = await runSuite(scenarios, {
       mutations: variant === "fixed" ? MutationSet.fixed() : MutationSet.vulnerable(),
@@ -156,7 +186,9 @@ async function main(): Promise<void> {
     for (const journey of suite.journeys) {
       const fired = journey.firedInvariants.join(", ") || "—";
       console.log(
-        `    ${journey.disposition.padEnd(17)}${journey.scenarioId.padEnd(28)}${fired}`,
+        // 36, because an adversary-written id like gen-vegan-coffee-hamper-under-2000
+        // overran 28 and collided with the next column.
+        `    ${journey.disposition.padEnd(17)}${journey.scenarioId.padEnd(36)}${fired}`,
       );
     }
     console.log(
@@ -172,7 +204,7 @@ async function main(): Promise<void> {
   }
 
   const suite = results[results.length - 1]!.suite;
-  const vulnerable = results[0]!.suite;
+  const vulnerable = results.length > 1 ? results[0]!.suite : null;
 
   if (suite.inconclusive === suite.journeys.length) {
     console.error(
@@ -184,10 +216,20 @@ async function main(): Promise<void> {
   }
 
   const verdictMoved =
-    vulnerable.unsafeViolations > 0 && suite.unsafeViolations === 0;
+    vulnerable !== null &&
+    vulnerable.unsafeViolations > 0 &&
+    suite.unsafeViolations === 0;
 
   console.log();
-  if (verdictMoved) {
+  if (!vulnerable) {
+    console.log(
+      `✓ ${suite.journeys.length} live-agent journeys against a merchant behind a mapping,\n` +
+        `  using the same twelve invariants and readiness rule HamperHub is judged by.\n` +
+        `  Set AGENTPROOF_COMPARE_VARIANTS=1 to also run the vulnerable integration and\n` +
+        `  watch the verdict move — that costs twice the time to re-prove something the\n` +
+        `  HamperHub suite already establishes deterministically.\n`,
+    );
+  } else if (verdictMoved) {
     console.log(
       `✓ ${suite.journeys.length} live-agent journeys per variant against a merchant behind\n` +
         `  a mapping. The verdict moved — ${vulnerable.unsafeViolations} unsafe violations on the vulnerable\n` +

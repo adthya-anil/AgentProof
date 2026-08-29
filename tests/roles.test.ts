@@ -88,6 +88,76 @@ describe("dividing work between models", () => {
     expect(suite.generatorModel).toBe("anthropic:b");
   });
 
+  it("does not name the adversary as a buyer when the pool contains it", async () => {
+    /**
+     * The bug this pins cost a real misreading. `roles.buyers` was the whole configured
+     * pool, so a split run listed the adversary as a buyer alongside its actual job —
+     * and beside a by-model table that reads exactly like the same goals being run twice,
+     * which is the one thing the split exists to prevent.
+     */
+    const suite = await assembleSuite({
+      llm: a,
+      // The adversary is *in* the pool, which is the ordinary case: two configured models,
+      // one promoted to write the goals.
+      llms: [a, b],
+      adversary: b,
+      policy: loadPolicyFromFile(),
+      generatedCount: 1,
+    });
+
+    expect(suite.roles.adversary).toBe("anthropic:b");
+    expect(suite.roles.buyers).toEqual(["openai:a"]);
+    expect(suite.roles.buyers).not.toContain("anthropic:b");
+  });
+
+  it("still names the single model a buyer when it does both jobs", async () => {
+    /**
+     * The case that makes the filter wrong if applied naively: with one model there is
+     * nothing to subtract, and reporting no buyers at all would be worse than reporting
+     * the truth, which is that it shops and writes.
+     */
+    const suite = await assembleSuite({
+      llm: a,
+      llms: [a],
+      policy: loadPolicyFromFile(),
+      generatedCount: 1,
+    });
+    expect(suite.roles.adversary).toBe("openai:a");
+    expect(suite.roles.buyers).toEqual(["openai:a"]);
+  });
+
+  it("deals goals across buyers instead of repeating them", async () => {
+    /**
+     * The concern behind all of this: two models must not mean the same journey twice.
+     * Round-robin *deals* — every goal is attempted once, by one model — so a two-buyer
+     * pool produces the same number of journeys as one, split between them.
+     */
+    const one = await assembleSuite({
+      mode: "agent",
+      llm: a,
+      llms: [a],
+      policy: loadPolicyFromFile(),
+      generatedCount: 0,
+    });
+    const two = await assembleSuite({
+      mode: "agent",
+      llm: a,
+      llms: [a, b],
+      policy: loadPolicyFromFile(),
+      generatedCount: 0,
+    });
+
+    expect(two.scenarios.length).toBe(one.scenarios.length);
+    const ids = two.scenarios.map((s) => s.id);
+    expect(ids.length - new Set(ids).size).toBe(0);
+
+    // And both buyers actually got work, rather than one taking everything.
+    const drivers = new Set(
+      two.scenarios.map((s) => s.assignedModel).filter(Boolean),
+    );
+    expect(drivers.size).toBe(2);
+  });
+
   it("falls back to the primary model for generation when no adversary is set", async () => {
     const suite = await assembleSuite({
       llm: a,
