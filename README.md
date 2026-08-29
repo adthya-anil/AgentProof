@@ -441,6 +441,23 @@ carry no product ids at all, which is why they port.
 variants is reported as exactly that — the agent may simply not have walked into the
 seeded defects — rather than presented as a clean bill of health.
 
+**A journey cannot test a rule the merchant withheld.** `live-inventory-changed`
+passed three runs out of three against Nordwell with nothing fired and no money at
+risk, and it was right to: `INV-INVENTORY` needs `reservation.lookup`, Nordwell has
+none, so the rule was withheld before it ever ran. The stock-out did reach the
+merchant — but the buyer's unit was already reserved, so nothing about their purchase
+became unsafe and neither the Guard nor the merchant had anything to object to.
+Reporting that as `passed` read as "the integration handled a stock-out correctly"
+when the truth is "this cannot be tested here", so it is now inconclusive and says
+which rule was missing. Coverage built from journeys like that is coverage of nothing.
+
+**Six products was not a shop.** The buyer goals assume choice — "build a coffee
+hamper" against a catalogue with one coffee left agents searching twice, finding
+nothing new, and declining, so two of the first five journeys ended inconclusive for
+no reason but an empty-looking shelf. Nordwell now carries 16 products across 8
+categories with enough total value that the ₹5,000 ceiling is reachable in a few
+lines. Different products and prices from HamperHub, same shape of shop.
+
 ### Reads are batched
 
 Six line items across five checkpoints is thirty product reads. A mapping that

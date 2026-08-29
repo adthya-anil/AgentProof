@@ -1,6 +1,7 @@
 import type { Environment } from "../harness.js";
 import type { ToolCaller, ToolResult } from "../guard/guard.js";
 import type { ToolName } from "../hamperhub/tools.js";
+import { formatMinor } from "../core/money.js";
 import type { Interference } from "../scenarios/types.js";
 
 /**
@@ -20,6 +21,7 @@ import type { Interference } from "../scenarios/types.js";
 export class InterferingToolCaller implements ToolCaller {
   private fired = false;
   private failure: string | null = null;
+  private effect: string | null = null;
 
   constructor(
     private readonly inner: ToolCaller,
@@ -59,4 +61,52 @@ export class InterferingToolCaller implements ToolCaller {
   failureReason(): string | null {
     return this.failure;
   }
+
+  /** What the fault changed, in words, once it has fired. */
+  appliedEffect(): string | null {
+    return this.effect;
+  }
+}
+
+/**
+ * Runs a fault and reports which catalogue values it moved.
+ *
+ * Diffing before and after rather than asking the interference to describe itself: a
+ * description the fault writes about its own intent can drift from what it did, and the
+ * thing worth recording is the change that actually landed. Reads local state after the
+ * next sync would have happened, so a merchant-side write shows up as the price the engine
+ * will actually compare against.
+ */
+async function describeEffect(
+  env: { state: { listProducts(): Array<{ id: string; name: string; priceMinor: number }>; freeStock(id: string): number };
+         catalog?: { viewFor(ids: readonly string[]): Promise<unknown> } },
+  run: () => void | Promise<void>,
+): Promise<string> {
+  const before = new Map(
+    env.state.listProducts().map((p) => [p.id, { price: p.priceMinor, stock: env.state.freeStock(p.id), name: p.name }]),
+  );
+
+  await run();
+
+  // Pull the merchant's current answer in, so a remote write is visible here too.
+  if (env.catalog) {
+    await env.catalog.viewFor([...before.keys()]).catch(() => undefined);
+  }
+
+  const changes: string[] = [];
+  for (const product of env.state.listProducts()) {
+    const was = before.get(product.id);
+    if (!was) continue;
+    if (was.price !== product.priceMinor) {
+      changes.push(
+        `${product.name} ${formatMinor(was.price)} → ${formatMinor(product.priceMinor)}`,
+      );
+    }
+    const stock = env.state.freeStock(product.id);
+    if (was.stock !== stock) {
+      changes.push(`${product.name} stock ${was.stock} → ${stock}`);
+    }
+  }
+
+  return changes.length > 0 ? changes.join("; ") : "no catalogue value changed";
 }
