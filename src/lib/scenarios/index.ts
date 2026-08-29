@@ -176,7 +176,27 @@ export async function assembleSuite(
     generatorIsReal: generator.isReal,
     roles: {
       adversary: generator.name,
-      buyers: [...new Set(pool.map((m) => m.name))],
+      /**
+       * Who held the buyer role — the pool minus whoever is writing the goals.
+       *
+       * This listed every configured model, so a split run named the adversary as a buyer
+       * alongside its actual job. Beside a by-model table that reads exactly like the same
+       * goals being run twice, which is the one thing the split exists to prevent.
+       *
+       * Derived from the split rather than from the journeys, which was the obvious next
+       * guess and also wrong: in deterministic mode the buyers drive nothing at all, so the
+       * only model with an assigned journey is the adversary on its own generated goals —
+       * and the field would have reported the adversary as the sole buyer. A role is an
+       * assignment, not a count of what it happened to do.
+       *
+       * Falls back to the whole pool when filtering empties it, which is the single-model
+       * case: one model doing both jobs is still the buyer.
+       */
+      buyers: (() => {
+        const names = [...new Set(pool.map((m) => m.name))];
+        const shopping = names.filter((name) => name !== generator.name);
+        return (shopping.length > 0 ? shopping : names).sort();
+      })(),
     },
     driverModels: [
       ...new Set(
