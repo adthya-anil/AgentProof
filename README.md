@@ -67,7 +67,7 @@ separately rather than averaged into this table.
 | Escalated for approval | 2 | 1 |
 | Unsafe violations | 5 | 0 |
 | Money-critical escapes | 0 | 0 |
-| Money at risk (prevented) | ₹16,224.18 | ₹12,607.00 |
+| Money at risk (prevented) | ₹13,401.72 | ₹9,809.00 |
 | **Readiness** | **NOT READY** | **READY FOR CONTROLLED TEST** |
 
 Mutation evaluation, one mutant at a time:

@@ -312,6 +312,41 @@ describe("money at risk is split by whether anything actually stopped it", () =>
   });
 });
 
+describe("money at risk is attributed once per order, not once per rule", () => {
+  /**
+   * Two invariants objecting to ONE payable order is still one order's money at risk.
+   *
+   * reg-04-expired-quote fires INV-INVENTORY and INV-QUOTE-EXPIRY on the same ₹1399
+   * checkout. Summing every violation's moneyAtRiskMinor reported ₹2798 (139900 * 2) for
+   * a single order that was only ever worth ₹1399. The figure is deduped by intentId so
+   * the order counts once.
+   */
+  it("counts a two-invariant-one-order journey as one order's money", async () => {
+    const suite = await runSuite(REGRESSION_SCENARIOS, {
+      mutations: MutationSet.vulnerable(),
+    });
+
+    const reg04 = suite.journeys.find((j) => j.scenarioId === "reg-04-expired-quote");
+    expect(reg04).toBeDefined();
+
+    // More than one rule objected to the same order.
+    expect(reg04!.firedInvariants.length).toBeGreaterThan(1);
+
+    // One ₹1399 order, not the doubled ₹2798 the summing reduce produced.
+    expect(reg04!.moneyAtRiskMinor).toBe(139900);
+  });
+
+  it("still adds up to the total after dedup, so the split stays exact", async () => {
+    for (const mutations of [MutationSet.vulnerable(), MutationSet.fixed()]) {
+      const suite = await runSuite(REGRESSION_SCENARIOS, { mutations });
+
+      expect(suite.moneyPreventedMinor + suite.moneyNotPreventedMinor).toBe(
+        suite.moneyAtRiskMinor,
+      );
+    }
+  });
+});
+
 describe("the readiness verdict shows the number it was decided by", () => {
   /**
    * READY and INCONCLUSIVE differ on exactly one quantity, and no surface printed it. A

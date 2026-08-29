@@ -17,6 +17,34 @@ import { InterferingToolCaller } from "./interference.js";
 import { type PerturbationEvent, PerturbingToolCaller } from "./perturbation.js";
 
 /**
+ * Money at risk, attributed once per distinct order rather than once per rule.
+ *
+ * One payable order is one intentId. When two invariants object to the SAME
+ * order (e.g. INV-INVENTORY and INV-QUOTE-EXPIRY both firing on one ₹1399
+ * checkout), that order carries exactly one order's worth of money at risk —
+ * ₹1399, not ₹2798. Summing every violation's moneyAtRiskMinor double-counts
+ * the order once per rule, inflating the figure.
+ *
+ * We group by intentId (falling back to quoteId, then to the content-derived
+ * violation id when intentId is null, so a violation with no intent still
+ * contributes exactly once), and within each group take the MAX rather than the
+ * sum. All rules objecting to one order reference the same order value, so max
+ * equals that value; max is the robust choice if the amounts ever diverge.
+ */
+function sumMoneyAtRiskByOrder(rows: readonly Violation[]): Minor {
+  const byOrder = new Map<string, Minor>();
+  for (const row of rows) {
+    const key = row.intentId || row.quoteId || row.id;
+    const current = byOrder.get(key) ?? 0;
+    if (row.moneyAtRiskMinor > current) byOrder.set(key, row.moneyAtRiskMinor);
+    else if (!byOrder.has(key)) byOrder.set(key, row.moneyAtRiskMinor);
+  }
+  let total = 0;
+  for (const amount of byOrder.values()) total += amount;
+  return total;
+}
+
+/**
  * Why a journey proved nothing. Three genuinely different failures.
  *
  * Kept apart because they call for different actions: a withheld target means this merchant
@@ -524,10 +552,7 @@ export async function runScenario(
           ...new Set([...violations, ...escalations].map((v) => v.invariantId)),
         ],
         money_at_risk: toMajor(
-          [...violations, ...escalations].reduce(
-            (sum, v) => sum + v.moneyAtRiskMinor,
-            0,
-          ),
+          sumMoneyAtRiskByOrder([...violations, ...escalations]),
         ),
       },
     });
@@ -629,10 +654,7 @@ export async function runScenario(
       firedInvariants: [
         ...new Set([...violations, ...escalations].map((v) => v.invariantId)),
       ],
-      moneyAtRiskMinor: [...violations, ...escalations].reduce(
-        (sum, v) => sum + v.moneyAtRiskMinor,
-        0,
-      ),
+      moneyAtRiskMinor: sumMoneyAtRiskByOrder([...violations, ...escalations]),
       providerOrders,
       duplicatePayableOrders: Math.max(0, payable.length - 1),
       selfRejected,

@@ -221,7 +221,7 @@ describe("the README's measured results match a real run", () => {
       escalated: 2,
       unsafe: 5,
       escapes: 0,
-      atRisk: "₹16,224.18",
+      atRisk: "₹13,401.72",
       readiness: "NOT READY",
     });
 
@@ -239,14 +239,14 @@ describe("the README's measured results match a real run", () => {
       escalated: 1,
       unsafe: 0,
       escapes: 0,
-      atRisk: "₹12,607.00",
+      atRisk: "₹9,809.00",
       readiness: "READY FOR CONTROLLED TEST",
     });
 
     // And the figures themselves appear in the README, so the table cannot be
     // quietly deleted to make this pass.
-    expect(README).toContain("₹16,224.18");
-    expect(README).toContain("₹12,607.00");
+    expect(README).toContain("₹13,401.72");
+    expect(README).toContain("₹9,809.00");
   });
 
   it("still finds the 11.44% discount the README singles out", async () => {
