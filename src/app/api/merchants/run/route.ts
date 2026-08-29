@@ -148,6 +148,7 @@ export async function POST(request: NextRequest): Promise<Response> {
           endpoint,
         ).transport;
 
+        const declared = atEndpoint(parseMerchantSchema(NORDWELL_MAPPING), endpoint);
         const inferred = await inferMapping({
           llm: pool[0]!,
           merchant: "third-party",
@@ -155,6 +156,9 @@ export async function POST(request: NextRequest): Promise<Response> {
           transport,
           sample,
           requestedIds: [],
+          // How to browse it and whether it can be perturbed are configuration, not things
+          // a model can read off one response.
+          base: declared,
         });
 
         if (!inferred.ok) {
@@ -172,19 +176,16 @@ export async function POST(request: NextRequest): Promise<Response> {
           return;
         }
 
-        const schema = atEndpoint(inferred.schema, endpoint);
         /**
-         * The model is not asked how to browse the catalogue.
+         * Configuration comes through `base`; only the field mappings are inferred.
          *
-         * Enumeration is configuration, not something to infer from one response — the
-         * sample shows what a listing returns, never how to ask for it. Taken from the
-         * declared mapping so the inferred half stays strictly about where fields live.
+         * This route used to patch individual fields back onto the inferred schema, which
+         * dropped whichever one nobody remembered. `admin` was the one that got missed, so a
+         * merchant with working mutations reported that its prices could not be moved and
+         * two perturbation journeys came back untestable — with a plausible message rather
+         * than an error.
          */
-        const withCatalogue: MerchantSchema = {
-          ...schema,
-          catalogue: parseMerchantSchema(NORDWELL_MAPPING).catalogue,
-        };
-
+        const withCatalogue = atEndpoint(inferred.schema, endpoint);
         const adapter = new MerchantAdapter(withCatalogue, transportFor(withCatalogue));
         const capabilities = adapter.capabilities();
         const derived = new Set(adapter.derivedCapabilities());
