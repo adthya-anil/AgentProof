@@ -211,6 +211,35 @@ const graphqlTransport = z.object({
   root: fieldPath,
 });
 
+/**
+ * How to find out what the merchant sells.
+ *
+ * Fetch-by-id is enough to *verify* a quote, and it was all the adapter needed while a
+ * mapping only fed the invariants. It is not enough to *test* a merchant: an autonomous
+ * buyer starts by searching, and `search_products` cannot answer from a catalogue that
+ * can only be addressed by ids nobody has yet. Without this block, a mapped merchant can
+ * be checked but not shopped — which makes the mapping worth much less than the point of
+ * having one.
+ *
+ * Three ways, because merchants differ and none of them is guessable:
+ *
+ *  - `ids` — an explicit set. Honest and blunt: these are the products under test. Right
+ *    for a fixed catalogue, and the only option when a merchant offers no listing at all.
+ *  - `listQuery` — a GraphQL operation returning every product.
+ *  - `listPath` — a REST endpoint returning a list.
+ *
+ * Deliberately no pagination. A partial page silently becomes "the catalogue", and a
+ * preflight run over an unknown fraction of a shop reports a coverage number that means
+ * nothing. Better to state the ids than to sample without saying so.
+ */
+const catalogueSource = z.object({
+  ids: z.array(z.string().min(1)).optional(),
+  listQuery: z.string().min(1).optional(),
+  listPath: z.string().min(1).optional(),
+  /** Where the array of products sits in the listing response. */
+  root: fieldPath.optional(),
+});
+
 export const merchantSchema = z.object({
   merchant: z.string().min(1),
   /** Free-text, shown in reports so a reader knows which integration produced them. */
@@ -230,6 +259,14 @@ export const merchantSchema = z.object({
    * never existed.
    */
   supportsReservations: z.boolean().default(false),
+  /**
+   * How to enumerate the catalogue, for runs that shop rather than only verify.
+   *
+   * Optional, because a mapping that only feeds the invariants does not need it. A run
+   * that puts an agent in front of the merchant does, and says so plainly when it is
+   * absent rather than presenting an empty shop as a finished test.
+   */
+  catalogue: catalogueSource.default({}),
 });
 
 export type MerchantSchema = z.infer<typeof merchantSchema>;

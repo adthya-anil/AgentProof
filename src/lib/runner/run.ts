@@ -7,7 +7,7 @@ import type {
   PaymentAttempt,
   Quote,
 } from "../core/types.js";
-import { createEnvironment, createIntent } from "../harness.js";
+import { createEnvironment, createIntent, prepareEnvironment } from "../harness.js";
 import type { Environment, EnvironmentOptions } from "../harness.js";
 import type { MutationSet } from "../hamperhub/mutations.js";
 import { type Violation, integrationDefects } from "../policy/violations.js";
@@ -208,6 +208,14 @@ export async function runScenario(
   let env: Environment;
   try {
     env = createEnvironment(options);
+    /**
+     * Load the merchant before the journey touches it.
+     *
+     * Inside the try because reaching someone else's catalogue can fail, and a merchant
+     * that cannot be loaded must produce an errored journey with the reason rather than a
+     * journey that quietly shops HamperHub's shelves and reports a pass.
+     */
+    await prepareEnvironment(env);
   } catch (error) {
     return errorResult(scenario, startedAt, error);
   }

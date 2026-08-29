@@ -28,7 +28,7 @@ an API key or network access unless you explicitly opt in.
 
 ```bash
 npm install
-npm test                    # 524 tests (2 need DATABASE_URL)
+npm test                    # 539 tests (2 need DATABASE_URL)
 npm run typecheck
 
 npm run demo:happy          # successful ₹1,399 transaction
@@ -380,6 +380,66 @@ Found while building it: the OpenAI adapter self-healed exactly one provider qui
 per call, so a first call that tripped both `temperature` and `max_tokens` failed as
 though the endpoint were misconfigured. It now adapts until the provider stops
 complaining, bounded by the number of quirks it knows.
+
+### A mapped merchant can be preflighted, not only verified
+
+A mapping that only feeds the invariants buys the ability to check a quote. The point of
+mapping a merchant is to *test* it — to answer "is this shop safe for an autonomous
+buyer" — and that needs the suite, not one journey.
+
+```
+npm run build && npm start
+npm run demo:merchant-preflight
+```
+
+Eleven live-agent journeys per integration variant, against Nordwell, with the same
+twelve invariants and the same readiness rule HamperHub is judged by. The agent browses
+Nordwell's catalogue, picks its own products and chooses its own tool order:
+
+```
+  Catalogue       6 products, browsed over the wire
+  Capabilities    7 of 8
+
+  What the agent finds on the shelves:
+    NW-1001      ₹649.00  stock  12  coffee
+    NW-1002      ₹429.50  stock  30  tea
+    NW-1005      ₹515.00  stock   3  mug
+```
+
+Two things were missing, and neither was cosmetic.
+
+**The agent could not browse.** Fetch-by-id is enough to verify a quote and useless for
+shopping — `search_products` cannot answer from a catalogue addressable only by ids
+nobody has yet. So a mapping now declares how to enumerate: explicit `ids`, a GraphQL
+`listQuery`, or a REST `listPath`. Deliberately no pagination: a partial page silently
+becomes "the catalogue", and a run over an unknown fraction of a shop reports coverage
+that means nothing.
+
+**The runner had no seam.** `createEnvironment` now takes a merchant, and
+`prepareEnvironment` loads it. It takes a **factory**, not an instance, and that is the
+interesting part. A catalogue source holds the state it syncs into, so one shared
+instance across a suite meant every journey used a source bound to a state object none of
+them owned — quotes priced from one catalogue, verified against another. Every journey
+tripped `INV-PRICE-BINDING` including the clean one, and the run reported **6 unsafe
+violations and NOT READY**, which reads exactly like a real finding about the merchant. A
+factory makes that unexpressible.
+
+**Two perturbations were catalogue-coupled** and errored against Nordwell: they named
+`p-coffee-arabica` outright. They now prefer the named product when the merchant has it —
+keeping HamperHub's reproductions byte-identical — and otherwise follow whatever the
+buyer actually reserved. That is the truer statement of intent in both cases: the
+scenario wants the price of *the thing being bought* to move, and assuming the buyer
+chose coffee was always an assumption.
+
+**What still does not run against a mapped merchant.** The twelve deterministic
+regression scenarios, and that is deliberate. They name exact products and earn their
+keep by being precise reproductions against a known catalogue; rewriting them to pick
+"something cheap" would blur the thing they exist to pin down. The live-agent goals
+carry no product ids at all, which is why they port.
+
+**And detection depends on the agent.** A run where the verdict does not move between
+variants is reported as exactly that — the agent may simply not have walked into the
+seeded defects — rather than presented as a clean bill of health.
 
 ### Reads are batched
 
@@ -1184,7 +1244,7 @@ src/app/api/preflight/          Suite runner as a server-sent event stream
 src/app/                        Next.js dashboard (server components elsewhere)
 src/scripts/                    Runnable demos and database tooling
 scripts/dev-db.sh               Local Postgres for development
-tests/                          524 tests
+tests/                          539 tests
 ```
 
 Money is an integer count of paise throughout. Float rupees are banned: an

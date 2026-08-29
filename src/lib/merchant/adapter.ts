@@ -83,6 +83,14 @@ export interface CatalogTransport {
   readonly kind: string;
   /** Returns one raw object per id it could resolve, keyed by the id requested. */
   fetch(ids: readonly string[]): Promise<Map<string, unknown>>;
+  /**
+   * Reads a whole catalogue listing.
+   *
+   * Optional because fetch-by-id is enough to verify a quote. It is not enough to let an
+   * agent shop, and a transport that cannot list says so by not implementing this rather
+   * than by returning nothing.
+   */
+  list?(operation: string, root?: string): Promise<unknown[]>;
 }
 
 /**
@@ -146,6 +154,46 @@ export class MerchantAdapter {
       derived.push("inventory.version");
     }
     return derived;
+  }
+
+  /**
+   * Every product id this merchant sells, for a run that shops rather than verifies.
+   *
+   * Explicit ids win when given: they are a statement about what is under test, which a
+   * listing endpoint is not. Throws rather than returning an empty list when the mapping
+   * declares no way to enumerate — an empty catalogue would run a whole suite against a
+   * shop with nothing in it and report the result as though it meant something.
+   */
+  async listIds(): Promise<string[]> {
+    const { catalogue, product } = this.schema;
+    if (catalogue.ids && catalogue.ids.length > 0) return [...catalogue.ids];
+
+    const operation = catalogue.listQuery ?? catalogue.listPath;
+    if (!operation) {
+      throw new Error(
+        `${this.schema.label} has no way to enumerate its catalogue. Add ` +
+          `catalogue.ids, catalogue.listQuery or catalogue.listPath to the mapping — ` +
+          `an agent cannot shop a merchant it cannot browse.`,
+      );
+    }
+    if (!this.transport.list) {
+      throw new Error(
+        `the ${this.transport.kind} transport cannot list a catalogue`,
+      );
+    }
+
+    const rows = await this.transport.list(operation, catalogue.root);
+    const ids = rows
+      .map((row) => readPath(row, product.id))
+      .filter((id): id is string | number => typeof id === "string" || typeof id === "number")
+      .map(String);
+    if (ids.length === 0) {
+      throw new Error(
+        `catalogue listing returned ${rows.length} rows but no ids resolved at ` +
+          `'${product.id}'`,
+      );
+    }
+    return [...new Set(ids)];
   }
 
   /** Reads the given products and returns a synchronous view over the result. */

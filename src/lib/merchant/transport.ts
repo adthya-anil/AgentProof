@@ -66,6 +66,30 @@ export class RestTransport implements CatalogTransport {
     return this.schema.batch ? this.fetchBatch(ids) : this.fetchEach(ids);
   }
 
+  /** Reads a listing endpoint, when the mapping declares one. */
+  async list(path: string, root?: string): Promise<unknown[]> {
+    const url = new URL(path, this.schema.baseUrl);
+    const response = await this.fetcher(url.toString(), {
+      method: "GET",
+      headers: this.schema.headers,
+    });
+    if (!response.ok) {
+      throw new TransportError(
+        `catalogue listing failed with ${response.status}`,
+        response.status,
+      );
+    }
+    const body = await response.json();
+    const rows = root ? readPath(body, root) : body;
+    if (!Array.isArray(rows)) {
+      throw new TransportError(
+        `catalogue listing has no array at '${root ?? "(root)"}'`,
+        response.status,
+      );
+    }
+    return rows;
+  }
+
   private async fetchBatch(ids: readonly string[]): Promise<Map<string, unknown>> {
     const batch = this.schema.batch;
     if (!batch) return this.fetchEach(ids);
@@ -172,6 +196,39 @@ export class GraphQLTransport implements CatalogTransport {
     private readonly idPath: string,
     private readonly fetcher: Fetcher = globalThis.fetch as Fetcher,
   ) {}
+
+  /** Runs a listing operation, when the mapping declares one. */
+  async list(query: string, root?: string): Promise<unknown[]> {
+    const response = await this.fetcher(this.schema.endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...this.schema.headers },
+      body: JSON.stringify({ query, variables: {} }),
+    });
+    if (!response.ok) {
+      throw new TransportError(
+        `catalogue listing failed with ${response.status}`,
+        response.status,
+      );
+    }
+    const body = (await response.json()) as {
+      data?: unknown;
+      errors?: Array<{ message?: string }>;
+    };
+    if (Array.isArray(body.errors) && body.errors.length > 0) {
+      throw new TransportError(
+        `graphql errors: ${body.errors.map((e) => e.message ?? "unknown").join("; ")}`,
+        response.status,
+      );
+    }
+    const rows = readPath(body.data, root ?? this.schema.root);
+    if (!Array.isArray(rows)) {
+      throw new TransportError(
+        `catalogue listing has no array at data.${root ?? this.schema.root}`,
+        response.status,
+      );
+    }
+    return rows;
+  }
 
   async fetch(ids: readonly string[]): Promise<Map<string, unknown>> {
     const response = await this.fetcher(this.schema.endpoint, {

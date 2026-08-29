@@ -1,4 +1,6 @@
 import type { Scenario, ScenarioContext, ScenarioOutcome } from "./types.js";
+import type { Minor } from "../core/money.js";
+import type { Environment } from "../harness.js";
 
 /**
  * The fixed regression suite (§7A).
@@ -292,7 +294,17 @@ const DETERMINISTIC_SCENARIOS: readonly Omit<Scenario, "driver">[] = Object.free
       afterTool: "approve_quote",
       label: "the supplier raises the coffee price",
       apply: (env) => {
-        env.state.setPrice("p-coffee-arabica", 64900, "Supplier cost increase");
+        const target = contestedProduct(env, "p-coffee-arabica");
+        if (target) {
+          // The exact ₹649.00 when it is HamperHub's arabica, so the reproduction is
+          // unchanged; a proportional rise otherwise, which is all the rule needs.
+          const raised =
+            target.productId === "p-coffee-arabica"
+              ? 64900
+              : target.unitPriceMinor +
+                Math.max(100, Math.round(target.unitPriceMinor * 0.08));
+          env.state.setPrice(target.productId, raised, "Supplier cost increase");
+        }
         env.clock.advanceMinutes(1);
       },
     },
@@ -315,10 +327,13 @@ const DETERMINISTIC_SCENARIOS: readonly Omit<Scenario, "driver">[] = Object.free
       afterTool: "approve_quote",
       label: "a stock-take reconciles the coffee shelf to zero",
       apply: (env) => {
-        env.state.forceStockOut(
-          "p-coffee-arabica",
-          "Stock-take correction: shelf count reconciled to zero",
-        );
+        const target = contestedProduct(env, "p-coffee-arabica");
+        if (target) {
+          env.state.forceStockOut(
+            target.productId,
+            "Stock-take correction: shelf count reconciled to zero",
+          );
+        }
         env.clock.advanceMinutes(1);
       },
     },
@@ -447,6 +462,39 @@ const DETERMINISTIC_SCENARIOS: readonly Omit<Scenario, "driver">[] = Object.free
     },
   },
 ]);
+
+
+/**
+ * The product this journey's buyer actually reserved.
+ *
+ * State perturbations named a product outright — `p-coffee-arabica` — which is exactly
+ * right for a deterministic reproduction against a known catalogue and useless against any
+ * other. Replayed as a live goal against a mapped merchant, the same hooks threw: the
+ * product does not exist there, and two journeys errored rather than testing anything.
+ *
+ * So the named product is preferred when the merchant has it, keeping HamperHub's
+ * reproductions byte-identical, and otherwise the perturbation follows the buyer. That is
+ * arguably the truer statement of intent in both cases: the scenario wants the price of
+ * *the thing being bought* to move, and assuming the buyer chose coffee was always an
+ * assumption.
+ */
+function contestedProduct(
+  env: Environment,
+  preferred: string,
+): { productId: string; unitPriceMinor: Minor } | null {
+  const named = env.state.getProduct(preferred);
+  if (named) return { productId: named.id, unitPriceMinor: named.priceMinor };
+
+  // The most recent quote is the one the buyer just approved.
+  const quotes = env.service.listQuotes();
+  for (let i = quotes.length - 1; i >= 0; i -= 1) {
+    const line = quotes[i]?.lineItems[0];
+    if (line && env.state.getProduct(line.productId)) {
+      return { productId: line.productId, unitPriceMinor: line.unitPriceMinor };
+    }
+  }
+  return null;
+}
 
 export const REGRESSION_SCENARIOS: readonly Scenario[] = Object.freeze(
   DETERMINISTIC_SCENARIOS.map((scenario) => ({
