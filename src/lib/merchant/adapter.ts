@@ -91,6 +91,8 @@ export interface CatalogTransport {
    * than by returning nothing.
    */
   list?(operation: string, root?: string): Promise<unknown[]>;
+  /** Runs a write against the merchant. Absent when the transport cannot write. */
+  mutate?(operation: string, variables: Record<string, unknown>): Promise<void>;
 }
 
 /**
@@ -194,6 +196,29 @@ export class MerchantAdapter {
       );
     }
     return [...new Set(ids)];
+  }
+
+  /**
+   * Moves the merchant's own price, when the mapping declares how.
+   *
+   * Returns false rather than throwing when it cannot: a third-party catalogue with no
+   * admin API is the ordinary case, and the caller's job is to report the journey as not
+   * exercised rather than to fail. `amountMajor` is a decimal string because that is what a
+   * merchant quoting rupees expects — sending paise would move the price a hundredfold.
+   */
+  async setMerchantPrice(productId: string, amountMajor: string): Promise<boolean> {
+    const mutation = this.schema.admin.setPrice?.mutation;
+    if (!mutation || !this.transport.mutate) return false;
+    await this.transport.mutate(mutation, { id: productId, amount: amountMajor });
+    return true;
+  }
+
+  /** Moves the merchant's own stock. Same contract as `setMerchantPrice`. */
+  async setMerchantStock(productId: string, quantity: number): Promise<boolean> {
+    const mutation = this.schema.admin.setStock?.mutation;
+    if (!mutation || !this.transport.mutate) return false;
+    await this.transport.mutate(mutation, { id: productId, quantity });
+    return true;
   }
 
   /** Reads the given products and returns a synchronous view over the result. */

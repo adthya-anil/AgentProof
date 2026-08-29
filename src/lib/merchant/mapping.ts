@@ -240,6 +240,37 @@ const catalogueSource = z.object({
   root: fieldPath.optional(),
 });
 
+/**
+ * How to move this merchant's own prices and stock, when it lets you.
+ *
+ * Needed because a state perturbation cannot be applied locally against a mapped
+ * merchant. `syncFromMerchant` treats the merchant as the source of truth — correctly —
+ * so it overwrites any local edit at the next checkpoint, including one a perturbation
+ * deliberately injected. Measured: a local setPrice to ₹700.92 was reverted to ₹649.00 on
+ * the following read, leaving the invariant comparing version 3 against version 1 with
+ * identical prices and ₹0.00 at risk. The rule fired on churn the harness caused itself.
+ *
+ * So the change has to happen at the merchant. Optional, and honestly so: a real
+ * third-party catalogue will not expose an admin API, and a scenario that cannot inject
+ * its fault must report that it did not run rather than appear to have passed.
+ *
+ * `{id}` and `{value}` are substituted into the variables.
+ */
+const adminSurface = z.object({
+  setPrice: z
+    .object({
+      /** A mutation taking $id and $amount, where $amount is a major-unit string. */
+      mutation: z.string().min(1),
+    })
+    .optional(),
+  setStock: z
+    .object({
+      /** A mutation taking $id and $quantity as an integer count. */
+      mutation: z.string().min(1),
+    })
+    .optional(),
+});
+
 export const merchantSchema = z.object({
   merchant: z.string().min(1),
   /** Free-text, shown in reports so a reader knows which integration produced them. */
@@ -267,6 +298,13 @@ export const merchantSchema = z.object({
    * absent rather than presenting an empty shop as a finished test.
    */
   catalogue: catalogueSource.default({}),
+  /**
+   * Admin mutations, for runs that need to change the merchant under the buyer.
+   *
+   * Absent means state perturbations cannot run against this merchant, and the journeys
+   * that depend on them are reported as not exercised.
+   */
+  admin: adminSurface.default({}),
 });
 
 export type MerchantSchema = z.infer<typeof merchantSchema>;

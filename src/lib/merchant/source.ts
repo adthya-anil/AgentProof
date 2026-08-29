@@ -43,6 +43,17 @@ export interface CatalogSource {
    * kind of merchant it holds in order to set one up correctly.
    */
   prime(productIds: readonly string[]): Promise<void>;
+  /**
+   * Changes the merchant's own price for a product, returning false when it cannot.
+   *
+   * On the interface rather than only on the adapter so a scenario never has to know which
+   * kind of merchant it is perturbing. Returning false rather than throwing, because "this
+   * merchant cannot be perturbed" is an ordinary fact about a third-party catalogue and the
+   * caller's job is to report the journey as not exercised, not to fail.
+   */
+  setMerchantPrice(productId: string, priceMinor: number): Promise<boolean>;
+  /** Changes the merchant's own stock. Same contract as `setMerchantPrice`. */
+  setMerchantStock(productId: string, quantity: number): Promise<boolean>;
 }
 
 /**
@@ -69,6 +80,22 @@ export class LocalCatalogSource implements CatalogSource {
     // The live object itself, not a copy. Re-reading is instantaneous in-process, and
     // copying would introduce the cached snapshot the design forbids.
     return this.state;
+  }
+
+  /**
+   * The in-process merchant is its own state, so a local edit *is* a merchant edit.
+   *
+   * Reported as unsupported anyway, which sounds contradictory and is not: the caller
+   * falls back to editing state directly, which for HamperHub is the same thing and keeps
+   * its reproductions byte-identical. Claiming support here would route them through an
+   * indirection that changes nothing.
+   */
+  async setMerchantPrice(): Promise<boolean> {
+    return false;
+  }
+
+  async setMerchantStock(): Promise<boolean> {
+    return false;
   }
 
   async prime(_productIds: readonly string[] = []): Promise<void> {
@@ -149,6 +176,16 @@ export class AdapterCatalogSource implements CatalogSource {
 
   async listIds(): Promise<string[]> {
     return this.adapter.listIds();
+  }
+
+  async setMerchantPrice(productId: string, priceMinor: number): Promise<boolean> {
+    // Major units as a string, because that is what a decimal-string catalogue speaks and
+    // sending paise to a merchant that quotes rupees would move the price a hundredfold.
+    return this.adapter.setMerchantPrice(productId, (priceMinor / 100).toFixed(2));
+  }
+
+  async setMerchantStock(productId: string, quantity: number): Promise<boolean> {
+    return this.adapter.setMerchantStock(productId, quantity);
   }
 
   async viewFor(productIds: readonly string[]): Promise<LiveCatalogView> {

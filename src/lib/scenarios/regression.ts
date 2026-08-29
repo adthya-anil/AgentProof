@@ -293,7 +293,7 @@ const DETERMINISTIC_SCENARIOS: readonly Omit<Scenario, "driver">[] = Object.free
     interference: {
       afterTool: "approve_quote",
       label: "the supplier raises the coffee price",
-      apply: (env) => {
+      apply: async (env) => {
         const target = contestedProduct(env, "p-coffee-arabica");
         if (target) {
           // The exact ₹649.00 when it is HamperHub's arabica, so the reproduction is
@@ -303,7 +303,14 @@ const DETERMINISTIC_SCENARIOS: readonly Omit<Scenario, "driver">[] = Object.free
               ? 64900
               : target.unitPriceMinor +
                 Math.max(100, Math.round(target.unitPriceMinor * 0.08));
-          env.state.setPrice(target.productId, raised, "Supplier cost increase");
+          if (!(await repriceAt(env, target.productId, raised, "Supplier cost increase"))) {
+            // Refusing to advance the clock too, so nothing about the world moved and the
+            // journey is unambiguously "the fault never fired".
+            throw new Error(
+              "this merchant's prices cannot be moved, so the price-drift fault " +
+                "could not be applied",
+            );
+          }
         }
         env.clock.advanceMinutes(1);
       },
@@ -326,13 +333,20 @@ const DETERMINISTIC_SCENARIOS: readonly Omit<Scenario, "driver">[] = Object.free
     interference: {
       afterTool: "approve_quote",
       label: "a stock-take reconciles the coffee shelf to zero",
-      apply: (env) => {
+      apply: async (env) => {
         const target = contestedProduct(env, "p-coffee-arabica");
         if (target) {
-          env.state.forceStockOut(
+          const applied = await stockOutAt(
+            env,
             target.productId,
             "Stock-take correction: shelf count reconciled to zero",
           );
+          if (!applied) {
+            throw new Error(
+              "this merchant's stock cannot be moved, so the stock-out fault could " +
+                "not be applied",
+            );
+          }
         }
         env.clock.advanceMinutes(1);
       },
@@ -478,6 +492,48 @@ const DETERMINISTIC_SCENARIOS: readonly Omit<Scenario, "driver">[] = Object.free
  * *the thing being bought* to move, and assuming the buyer chose coffee was always an
  * assumption.
  */
+/**
+ * Moves a price, at the merchant when there is one.
+ *
+ * A local `setPrice` does not survive a mapped merchant: `syncFromMerchant` treats the
+ * merchant as the source of truth and reverts the edit at the next checkpoint. Measured —
+ * ₹700.92 became ₹649.00 again on the following read, leaving INV-PRICE-BINDING comparing
+ * version 3 against version 1 with identical prices and ₹0.00 at risk. The rule fired on
+ * churn the harness had caused itself, and the journey reported as a safe rejection.
+ *
+ * So the merchant is asked first. Only when it cannot be asked — a third-party catalogue
+ * with no admin API — does this fall back to local state, which for the in-process merchant
+ * is the same thing and keeps its reproductions byte-identical.
+ *
+ * Returns false when neither route worked, so the journey reports that its fault never
+ * fired rather than appearing to have tested something.
+ */
+async function repriceAt(
+  env: Environment,
+  productId: string,
+  priceMinor: Minor,
+  reason: string,
+): Promise<boolean> {
+  if (env.catalog && (await env.catalog.setMerchantPrice(productId, priceMinor))) {
+    return true;
+  }
+  if (env.catalog) return false;
+  env.state.setPrice(productId, priceMinor, reason);
+  return true;
+}
+
+/** Empties a product's stock, at the merchant when there is one. */
+async function stockOutAt(
+  env: Environment,
+  productId: string,
+  reason: string,
+): Promise<boolean> {
+  if (env.catalog && (await env.catalog.setMerchantStock(productId, 0))) return true;
+  if (env.catalog) return false;
+  env.state.forceStockOut(productId, reason);
+  return true;
+}
+
 function contestedProduct(
   env: Environment,
   preferred: string,

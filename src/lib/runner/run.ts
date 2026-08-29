@@ -525,7 +525,12 @@ export async function runScenario(
         : interferenceMissed
           ? `${outcome.note} — "${scenario.interference!.label}" never happened: ` +
             `the agent did not complete ${scenario.interference!.afterTool}, so ` +
-            "this journey did not exercise its target invariant"
+            "this journey did not exercise its target invariant" +
+            // Distinguishes "the agent never got there" from "this merchant cannot be
+            // perturbed", which read identically otherwise.
+            (interferer?.failureReason()
+              ? ` (${interferer.failureReason()})`
+              : "")
           : outcome.note,
       violations,
       escalations,

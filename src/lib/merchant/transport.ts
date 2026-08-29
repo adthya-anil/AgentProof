@@ -197,6 +197,28 @@ export class GraphQLTransport implements CatalogTransport {
     private readonly fetcher: Fetcher = globalThis.fetch as Fetcher,
   ) {}
 
+  /** Runs a write against the merchant, when the mapping declares one. */
+  async mutate(operation: string, variables: Record<string, unknown>): Promise<void> {
+    const response = await this.fetcher(this.schema.endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...this.schema.headers },
+      body: JSON.stringify({ query: operation, variables }),
+    });
+    if (!response.ok) {
+      throw new TransportError(
+        `merchant write failed with ${response.status}`,
+        response.status,
+      );
+    }
+    const body = (await response.json()) as { errors?: Array<{ message?: string }> };
+    if (Array.isArray(body.errors) && body.errors.length > 0) {
+      throw new TransportError(
+        `graphql errors: ${body.errors.map((e) => e.message ?? "unknown").join("; ")}`,
+        response.status,
+      );
+    }
+  }
+
   /** Runs a listing operation, when the mapping declares one. */
   async list(query: string, root?: string): Promise<unknown[]> {
     const response = await this.fetcher(this.schema.endpoint, {
