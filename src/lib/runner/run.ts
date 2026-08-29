@@ -61,6 +61,21 @@ export type InconclusiveReason =
   | "target_withheld"
   | "fault_trigger_not_reached"
   | "fault_rejected_by_merchant"
+  /**
+   * The agent completed without its target invariant ever firing on a hazard.
+   *
+   * A live twin of a regression goal carries the goal's `targetsInvariant`, but the
+   * model chooses its own bundle. When it declines the hazard — stays under budget,
+   * never adds the unknown-allergen truffle — the target rule evaluates a benign cart
+   * and passes trivially, so it never fired and the journey completed clean. Reading
+   * that as `passed` is the same false assurance `target_withheld` exists to catch: the
+   * journey proved nothing about the rule it was built to probe, because the unsafe input
+   * never entered the transaction. It says so here rather than borrowing a clean pass.
+   *
+   * Deterministic reproductions force the hazard, so their target always fires; this only
+   * reaches an agent-driven journey that avoided its own hazard.
+   */
+  | "target_not_exercised"
   | "agent_stopped";
 
 export type JourneyDisposition =
@@ -502,11 +517,48 @@ export async function runScenario(
       scenario.targetsInvariant !== null &&
       withheldInvariants.includes(scenario.targetsInvariant);
 
+    /**
+     * A live twin that avoided its own hazard exercised nothing of its target.
+     *
+     * `live-unknown-allergen`, `live-over-budget` and their generated cousins carry a
+     * `targetsInvariant` but let the model pick the bundle. When the agent declines the
+     * hazard — stays under budget, never adds the unknown-allergen truffle — the target rule
+     * evaluates a benign cart and passes trivially: it is in `exercisedInvariants` (it ran)
+     * but never in `firedInvariants` (it had nothing to object to). The transaction the
+     * journey was built to probe never happened.
+     *
+     * Reporting that as `passed` reads as "the integration handled the hazard correctly" when
+     * the truth is "the hazard was never presented to it" — the same false assurance
+     * `targetWithheld` catches for a rule the merchant cannot supply, here for one the agent
+     * chose not to trigger. Coverage credit for it is credit for nothing, and `countDecided`
+     * excludes it below so a suite of hazard-dodging journeys cannot report READY on silence.
+     *
+     * Scoped to `driver === "agent"`: a deterministic reproduction forces the hazard, so its
+     * target always fires. Restricting to agent journeys keeps every one of the 12 fixed
+     * HamperHub reproductions untouched — they fire their target or are already handled — and
+     * confines this strictly to the live/generated twins that improvise.
+     */
+    const firedHere = new Set(
+      [...violations, ...escalations].map((v) => v.invariantId),
+    );
+    const targetNotExercised =
+      scenario.driver === "agent" &&
+      scenario.targetsInvariant !== null &&
+      !targetWithheld &&
+      !firedHere.has(scenario.targetsInvariant) &&
+      // Only reclassify what would otherwise read as a clean outcome. A journey the
+      // agent abandoned is already `inconclusive` via `outcome.inconclusive`; a defect
+      // or escalation elsewhere is a finding worth keeping under its own disposition.
+      outcome.completed &&
+      !selfRejected &&
+      defects.length === 0;
+
     const provedNothing =
       outcome.inconclusive ||
       perturbationMissed ||
       interferenceMissed ||
-      targetWithheld;
+      targetWithheld ||
+      targetNotExercised;
 
     /**
      * Ordered to match the ladder above: a withheld target outranks everything, because
@@ -532,7 +584,9 @@ export async function runScenario(
           ? faultRejectedByMerchant
             ? "fault_rejected_by_merchant"
             : "fault_trigger_not_reached"
-          : "agent_stopped";
+          : targetNotExercised
+            ? "target_not_exercised"
+            : "agent_stopped";
 
     const disposition: JourneyDisposition = provedNothing
       ? "inconclusive"
@@ -657,6 +711,16 @@ export async function runScenario(
             targetWithheld
             ? `${outcome.note} — but ${scenario.targetsInvariant} cannot run against ` +
               `this merchant, so nothing here could test it`
+            : /**
+               * A live twin that avoided its own hazard says so, rather than reading as a
+               * clean completion. The rule ran and passed, but on a benign cart: the unsafe
+               * input the journey was built to present never entered the transaction, so it
+               * tested nothing of its target.
+               */
+              targetNotExercised
+              ? `${outcome.note} — but the agent did not exercise ` +
+                `${scenario.targetsInvariant}: the hazard it targets never entered the ` +
+                "transaction, so this journey tested nothing of it"
             : /**
                * A fault that fired is stated even on a passing journey.
                *
@@ -867,7 +931,18 @@ function decideReadiness(
  * would be told the report is wrong when the report is the only honest part of it.
  */
 export function countDecided(journeys: readonly JourneyResult[]): number {
-  return journeys.filter((j) => j.exercisedInvariants.length > 0).length;
+  return journeys.filter(
+    (j) =>
+      j.exercisedInvariants.length > 0 &&
+      /**
+       * A journey that avoided its own target hazard put no invariant to work that means
+       * anything. Its target rule ran against a benign cart and passed trivially, so
+       * `exercisedInvariants` is non-empty — but that is coverage of nothing, exactly the
+       * illusion the readiness rule exists to reject. Excluded here so a suite of
+       * hazard-dodging live journeys cannot report READY on evidence it never gathered.
+       */
+      j.inconclusiveReason !== "target_not_exercised",
+  ).length;
 }
 
 export async function runSuite(

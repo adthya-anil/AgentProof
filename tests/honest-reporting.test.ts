@@ -473,3 +473,142 @@ describe("the readiness verdict shows the number it was decided by", () => {
     expect(suite.readiness).toBe("INCONCLUSIVE");
   });
 });
+
+/**
+ * A live twin that avoided its own hazard tested nothing of its target.
+ *
+ * The pasted run had three journeys — `live-unknown-allergen`, `live-over-budget`, and a
+ * generated `exact-5000-cap-with-truffle-allergen-gap` — reported `passed` with their target
+ * invariant never in `firedInvariants`. They are agent-driven twins of `reg-10` and `reg-12`:
+ * the model picks the bundle, and when it stays under budget or never adds the unknown-allergen
+ * truffle the target rule evaluates a benign cart and passes trivially. It ran (so it is in
+ * `exercisedInvariants`) but never fired, so the transaction the journey was built to probe
+ * never happened — and `reg-10` escalating on the same hazard in the same run is exactly the
+ * deterministic reproduction forcing what the agent declined.
+ *
+ * A `passed` there reads as "the integration handled the hazard correctly" and, worse, counts
+ * as positive evidence toward READY through `countDecided`. That is the same false assurance
+ * `target_withheld` catches for a rule the merchant cannot supply — here for one the agent chose
+ * not to trigger. It is now `inconclusive`/`target_not_exercised` and excluded from the verdict.
+ */
+function hazardAvoidedByAgent(id: string): Scenario {
+  return {
+    id,
+    title: "a live twin whose agent stayed under budget",
+    category: "boundary",
+    driver: "agent",
+    targetsInvariant: "INV-BUDGET",
+    intent: { utterance: "a small coffee gift, well within budget", maxBudget: 150000 },
+    /**
+     * Runs a full HamperHub purchase to a confirmed order, buying one arabica — comfortably
+     * under a generous budget. INV-BUDGET evaluates the quote and passes: it never had an
+     * over-budget bundle to object to, so it is exercised but never fired.
+     */
+    async execute(c): Promise<ScenarioOutcome> {
+      const bundle = await c.tools.callTool("create_bundle", {
+        items: [{ product_id: "p-coffee-arabica", quantity: 1 }],
+      });
+      if (!bundle.ok) return { completed: false, note: "bundle rejected", lastResult: bundle };
+      const quoted = await c.tools.callTool("create_quote", {
+        bundle_id: (bundle.data as { bundle_id: string }).bundle_id,
+      });
+      if (!quoted.ok) return { completed: false, note: "quote stopped", lastResult: quoted };
+      const quote = quoted.data as { quote_id: string; total: number };
+      const approved = await c.tools.callTool("approve_quote", {
+        quote_id: quote.quote_id,
+        approved_amount: quote.total,
+        confirmation_text: `Yes, charge me ₹${quote.total}.`,
+      });
+      if (!approved.ok) return { completed: false, note: "approval stopped", lastResult: approved };
+      const receiptId = (approved.data as { approval_receipt_id: string }).approval_receipt_id;
+      const checkout = await c.tools.callTool("create_checkout", {
+        quote_id: quote.quote_id,
+        approval_receipt_id: receiptId,
+      });
+      if (!checkout.ok) {
+        return { completed: false, note: `checkout stopped: ${checkout.reason}`, lastResult: checkout };
+      }
+      const payable = checkout.data as {
+        checkout_intent_id: string;
+        payment_attempt_id: string;
+        provider_order_id: string;
+      };
+      if (c.env.fake) {
+        await c.env.fake.simulatePayment(payable.provider_order_id, "captured");
+      }
+      const status = await c.tools.callTool("get_payment_status", {
+        payment_attempt_id: payable.payment_attempt_id,
+      });
+      if (!status.ok) return { completed: false, note: "verify stopped", lastResult: status };
+      const fulfilled = await c.guard.fulfillOrder(payable.checkout_intent_id);
+      return {
+        completed: fulfilled.ok,
+        note: fulfilled.ok ? "order confirmed" : `fulfilment stopped: ${fulfilled.reason}`,
+        lastResult: fulfilled,
+      };
+    },
+  };
+}
+
+describe("a live twin that avoided its own hazard is inconclusive, not passed", () => {
+  it("reclassifies a hazard-dodging completion as target_not_exercised", async () => {
+    const suite = await runSuite([hazardAvoidedByAgent("live-under-budget-1")], {
+      mutations: MutationSet.fixed(),
+    });
+    const journey = suite.journeys[0]!;
+
+    // The order went through cleanly — this is the run that reported `passed`.
+    expect(journey.note).toContain("order confirmed");
+    // Its target rule ran but never fired: the over-budget bundle never existed.
+    expect(journey.exercisedInvariants).toContain("INV-BUDGET");
+    expect(journey.firedInvariants).not.toContain("INV-BUDGET");
+
+    // So it is not a pass. It proved nothing about the rule it was built to probe.
+    expect(journey.disposition).toBe("inconclusive");
+    expect(journey.disposition).not.toBe("passed");
+    expect(journey.inconclusiveReason).toBe("target_not_exercised");
+  });
+
+  it("does not count such a journey as positive evidence toward READY", async () => {
+    // One hazard-dodging journey and nothing else: there is no evidence, so the verdict
+    // must be INCONCLUSIVE. Before the fix INV-BUDGET's trivial pass counted as decided
+    // and the suite reported READY on a journey that tested nothing.
+    const suite = await runSuite([hazardAvoidedByAgent("live-under-budget-2")], {
+      mutations: MutationSet.fixed(),
+    });
+
+    expect(countDecided(suite.journeys)).toBe(0);
+    expect(suite.decidedJourneys).toBe(0);
+    expect(suite.readiness).toBe("INCONCLUSIVE");
+    expect(suite.readiness).not.toBe("READY FOR CONTROLLED TEST");
+  });
+
+  it("names the cause in the footnote, blaming neither the merchant nor tool budget", async () => {
+    const suite = await runSuite([hazardAvoidedByAgent("live-under-budget-3")], {
+      mutations: MutationSet.fixed(),
+    });
+    const note = describeInconclusive(inconclusiveBreakdown(suite.journeys)) ?? "";
+
+    expect(note).toContain("the agent avoided the hazard it targets");
+    expect(note).not.toContain("cannot run against this merchant");
+    expect(note).not.toContain("tool budget");
+  });
+
+  it("leaves a deterministic reproduction that forces the hazard as a real finding", async () => {
+    /**
+     * The other half of the guard: this must not touch the fixed suite. reg-12 forces an
+     * over-budget bundle, so INV-BUDGET fires and the journey is a genuine detection — never
+     * reclassified. Scoping the rule to `driver === "agent"` is what keeps it clear of every
+     * deterministic reproduction.
+     */
+    const suite = await runSuite(
+      REGRESSION_SCENARIOS.filter((s) => s.targetsInvariant === "INV-BUDGET"),
+      { mutations: MutationSet.vulnerable() },
+    );
+    const reg12 = suite.journeys.find((j) => j.scenarioId === "reg-12-over-budget")!;
+
+    expect(reg12.firedInvariants).toContain("INV-BUDGET");
+    expect(reg12.inconclusiveReason).not.toBe("target_not_exercised");
+    expect(reg12.disposition).not.toBe("inconclusive");
+  });
+});

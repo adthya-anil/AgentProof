@@ -27,6 +27,11 @@ export interface InconclusiveBreakdown {
   faultRejectedByMerchant: number;
   /** The agent stopped early — exhausted its budget or declined to proceed. */
   agentStopped: number;
+  /**
+   * The agent completed but never presented its target hazard, so the target rule ran
+   * against a benign cart and never fired. Nothing of the target was tested.
+   */
+  targetNotExercised: number;
   total: number;
 }
 
@@ -42,6 +47,7 @@ export function inconclusiveBreakdown(
     faultTriggerNotReached: count("fault_trigger_not_reached"),
     faultRejectedByMerchant: count("fault_rejected_by_merchant"),
     agentStopped: count("agent_stopped"),
+    targetNotExercised: count("target_not_exercised"),
     total: inconclusive.length,
   };
 }
@@ -74,6 +80,12 @@ export function describeInconclusive(
     parts.push(
       `${breakdown.faultRejectedByMerchant} because the fault it depends on could not be ` +
         "applied to this merchant",
+    );
+  }
+  if (breakdown.targetNotExercised > 0) {
+    parts.push(
+      `${breakdown.targetNotExercised} because the agent avoided the hazard it targets, ` +
+        "so the rule never fired on anything unsafe",
     );
   }
   if (breakdown.agentStopped > 0) {
