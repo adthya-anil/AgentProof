@@ -344,7 +344,7 @@ const DETERMINISTIC_SCENARIOS: readonly Omit<Scenario, "driver">[] = Object.free
         const target = contestedProduct(env, "p-coffee-arabica");
         if (!target) {
           // Nothing in the order can be perturbed; throw so the journey is inconclusive
-          // (fault_never_fired) rather than a silent pass against INV-INVENTORY.
+          // (fault_rejected_by_merchant) rather than a silent pass against INV-INVENTORY.
           throw new Error(
             "no product in this buyer's order could be stocked out, so the stock-out " +
               "fault could not be applied",

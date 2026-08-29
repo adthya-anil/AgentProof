@@ -45,16 +45,22 @@ function sumMoneyAtRiskByOrder(rows: readonly Violation[]): Minor {
 }
 
 /**
- * Why a journey proved nothing. Three genuinely different failures.
+ * Why a journey proved nothing. Four genuinely different failures.
  *
  * Kept apart because they call for different actions: a withheld target means this merchant
- * cannot support the rule, a fault that never fired means the scenario did not reach its
- * trigger, and an agent that stopped means the model gave up. A report that merges them
- * describes a limitation of the merchant as a limitation of the agent.
+ * cannot support the rule; a trigger not reached means the scenario never got the agent to
+ * the tool the fault targets, so the fault was never attempted; a fault rejected by the
+ * merchant means the fault WAS attempted but the merchant refused to be perturbed; and an
+ * agent that stopped means the model gave up. The middle two used to be one value
+ * (`fault_never_fired`), which described "the agent did not reach it" and "this merchant
+ * would not allow it" as the same thing even though the per-row note already told them
+ * apart. A report that merges them describes a limitation of the merchant as a limitation
+ * of the agent.
  */
 export type InconclusiveReason =
   | "target_withheld"
-  | "fault_never_fired"
+  | "fault_trigger_not_reached"
+  | "fault_rejected_by_merchant"
   | "agent_stopped";
 
 export type JourneyDisposition =
@@ -506,12 +512,26 @@ export async function runScenario(
      * Ordered to match the ladder above: a withheld target outranks everything, because
      * when the rule cannot run here nothing the agent did afterwards could have tested it.
      */
+    /**
+     * The two ways a fault can be absent, told apart the way the per-row note already is.
+     *
+     * A fault the merchant refused is one the interferer *attempted* — `apply()` threw and
+     * `failureReason()` is non-null. A fault whose trigger was never reached was never
+     * attempted, so `failureReason()` is null. Perturbations have no `failureReason()` seam:
+     * a perturbation with an `applied()` count of zero always means the trigger was not
+     * reached, so `perturbationMissed` maps to trigger-not-reached.
+     */
+    const faultRejectedByMerchant =
+      interferenceMissed && interferer?.failureReason() != null;
+
     const inconclusiveReason: InconclusiveReason | null = !provedNothing
       ? null
       : targetWithheld
         ? "target_withheld"
         : perturbationMissed || interferenceMissed
-          ? "fault_never_fired"
+          ? faultRejectedByMerchant
+            ? "fault_rejected_by_merchant"
+            : "fault_trigger_not_reached"
           : "agent_stopped";
 
     const disposition: JourneyDisposition = provedNothing

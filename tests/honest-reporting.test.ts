@@ -23,11 +23,14 @@ import { REGRESSION_SCENARIOS } from "../src/lib/scenarios/regression.js";
  * is the only detector this system had, and it is not one worth relying on twice.
  */
 
-/** Reaches nothing, so the fault it depends on cannot fire. */
-function faultNeverFires(id: string): Scenario {
+/**
+ * Case (a): the agent never reaches the tool the fault targets, so the fault is never
+ * attempted. `apply` is never called, `failureReason()` stays null.
+ */
+function faultTriggerNotReached(id: string): Scenario {
   return {
     id,
-    title: "a fault with no chance to fire",
+    title: "a fault whose trigger is never reached",
     category: "state_perturbation",
     driver: "deterministic",
     targetsInvariant: "INV-PRICE-BINDING",
@@ -42,6 +45,63 @@ function faultNeverFires(id: string): Scenario {
         items: [{ product_id: "p-does-not-exist", quantity: 1 }],
       });
       return { completed: false, note: "merchant refused", lastResult: result };
+    },
+  };
+}
+
+/**
+ * Case (b): the agent DOES reach the trigger, so the fault is attempted, but `apply` throws
+ * because this merchant refuses to be perturbed. `failureReason()` is non-null.
+ *
+ * Runs a full HamperHub purchase to `approve_quote` so the interference fires, then the
+ * fault raises "this merchant's prices cannot be moved" — the interference.test.ts pattern.
+ */
+function faultRejectedByMerchant(id: string): Scenario {
+  return {
+    id,
+    title: "a fault this merchant refuses to apply",
+    category: "state_perturbation",
+    driver: "deterministic",
+    targetsInvariant: "INV-PRICE-BINDING",
+    intent: { utterance: "a hamper", maxBudget: 150000 },
+    interference: {
+      afterTool: "approve_quote",
+      label: "the supplier raises the price",
+      apply: async () => {
+        throw new Error("this merchant's prices cannot be moved");
+      },
+    },
+    async execute(c): Promise<ScenarioOutcome> {
+      const bundle = await c.tools.callTool("create_bundle", {
+        items: [{ product_id: "p-coffee-arabica", quantity: 1 }],
+      });
+      if (!bundle.ok) {
+        return { completed: false, note: "bundle rejected", lastResult: bundle };
+      }
+      const quoted = await c.tools.callTool("create_quote", {
+        bundle_id: (bundle.data as { bundle_id: string }).bundle_id,
+      });
+      if (!quoted.ok) {
+        return { completed: false, note: "quote stopped", lastResult: quoted };
+      }
+      const quote = quoted.data as { quote_id: string; total: number };
+      const approved = await c.tools.callTool("approve_quote", {
+        quote_id: quote.quote_id,
+        approved_amount: quote.total,
+        confirmation_text: `Yes, charge me ₹${quote.total}.`,
+      });
+      if (!approved.ok) {
+        return { completed: false, note: "approval stopped", lastResult: approved };
+      }
+      const checkout = await c.tools.callTool("create_checkout", {
+        quote_id: quote.quote_id,
+        approval_receipt_id: (approved.data as { receipt_id: string }).receipt_id,
+      });
+      return {
+        completed: checkout.ok,
+        note: "4 tool calls; completed",
+        lastResult: checkout,
+      };
     },
   };
 }
@@ -160,7 +220,7 @@ function targetsAWithheldRule(id: string): Scenario {
   };
 }
 
-describe("an inconclusive journey says which of three things went wrong", () => {
+describe("an inconclusive journey says which of four things went wrong", () => {
   it("names a withheld target as the merchant's limit, not the agent's", async () => {
     /**
      * The reported bug, reproduced. A journey completed six tool calls against a mapped
@@ -186,13 +246,22 @@ describe("an inconclusive journey says which of three things went wrong", () => 
     expect(note).not.toContain("tool budget");
   });
 
-  it("names a fault that never got its chance", async () => {
-    const suite = await runSuite([faultNeverFires("f-1")], {
+  it("names a fault whose trigger the agent never reached (case a)", async () => {
+    const suite = await runSuite([faultTriggerNotReached("f-1")], {
       mutations: MutationSet.fixed(),
     });
 
     expect(suite.journeys[0]?.disposition).toBe("inconclusive");
-    expect(suite.journeys[0]?.inconclusiveReason).toBe("fault_never_fired");
+    expect(suite.journeys[0]?.inconclusiveReason).toBe("fault_trigger_not_reached");
+  });
+
+  it("names a fault this merchant refused to apply (case b)", async () => {
+    const suite = await runSuite([faultRejectedByMerchant("r-1")], {
+      mutations: MutationSet.fixed(),
+    });
+
+    expect(suite.journeys[0]?.disposition).toBe("inconclusive");
+    expect(suite.journeys[0]?.inconclusiveReason).toBe("fault_rejected_by_merchant");
   });
 
   it("names an agent that stopped early", async () => {
@@ -217,16 +286,30 @@ describe("an inconclusive journey says which of three things went wrong", () => 
 });
 
 describe("the inconclusive footnote asserts only causes that occurred", () => {
-  it("does not blame tool budget when the fault was what failed", async () => {
-    const suite = await runSuite([faultNeverFires("f-2")], {
+  it("blames the agent's reach, not tool budget, when the trigger was not reached (case a)", async () => {
+    const suite = await runSuite([faultTriggerNotReached("f-2")], {
       mutations: MutationSet.fixed(),
     });
     const note = describeInconclusive(inconclusiveBreakdown(suite.journeys)) ?? "";
 
-    expect(note).toContain("the fault it depends on was never applied");
+    expect(note).toContain("was never triggered — the agent did not reach it");
+    // Case (a) must not read like case (b): the merchant did not refuse anything.
+    expect(note).not.toContain("could not be applied to this merchant");
     // The sentence that was printed regardless of cause.
     expect(note).not.toContain("tool budget");
     expect(note).not.toContain("declining to proceed");
+  });
+
+  it("blames the merchant, not the agent, when the merchant refused the fault (case b)", async () => {
+    const suite = await runSuite([faultRejectedByMerchant("r-2")], {
+      mutations: MutationSet.fixed(),
+    });
+    const note = describeInconclusive(inconclusiveBreakdown(suite.journeys)) ?? "";
+
+    expect(note).toContain("could not be applied to this merchant");
+    // Case (b) must not read like case (a): the agent did reach the trigger.
+    expect(note).not.toContain("the agent did not reach it");
+    expect(note).not.toContain("tool budget");
   });
 
   it("does blame the agent when the agent is what stopped", async () => {
@@ -238,15 +321,21 @@ describe("the inconclusive footnote asserts only causes that occurred", () => {
     expect(note).toContain("tool budget");
   });
 
-  it("names both causes when a run has both, rather than picking one", async () => {
-    const suite = await runSuite([faultNeverFires("f-3"), agentStops("a-3")], {
-      mutations: MutationSet.fixed(),
-    });
+  it("names every cause a run has, rather than picking one", async () => {
+    const suite = await runSuite(
+      [
+        faultTriggerNotReached("f-3"),
+        faultRejectedByMerchant("r-3"),
+        agentStops("a-3"),
+      ],
+      { mutations: MutationSet.fixed() },
+    );
     const note = describeInconclusive(inconclusiveBreakdown(suite.journeys)) ?? "";
 
-    expect(note).toContain("the fault it depends on was never applied");
+    expect(note).toContain("was never triggered — the agent did not reach it");
+    expect(note).toContain("could not be applied to this merchant");
     expect(note).toContain("tool budget");
-    expect(note).toContain("2 journey(s)");
+    expect(note).toContain("3 journey(s)");
   });
 
   /**
