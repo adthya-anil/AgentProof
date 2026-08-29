@@ -554,14 +554,21 @@ export async function runScenario(
         ? `${outcome.note} — perturbation never fired: the agent did not reach ` +
           "the tool the fault targets, so this journey did not exercise it"
         : interferenceMissed
-          ? `${outcome.note} — "${scenario.interference!.label}" never happened: ` +
-            `the agent did not complete ${scenario.interference!.afterTool}, so ` +
-            "this journey did not exercise its target invariant" +
-            // Distinguishes "the agent never got there" from "this merchant cannot be
-            // perturbed", which read identically otherwise.
+          ? /**
+             * Two reasons a fault can be absent, and they must not share a sentence.
+             *
+             * This reported both as "the agent did not complete approve_quote", appending the
+             * real reason in brackets. Printed next to a tool path that plainly shows
+             * approve_quote, the reader had to resolve a contradiction against the source,
+             * and the leading clause pointed at the agent when the fault itself was what
+             * failed. The bracketed truth lost to the confident sentence in front of it.
+             */
             (interferer?.failureReason()
-              ? ` (${interferer.failureReason()})`
-              : "")
+              ? `${outcome.note} — "${scenario.interference!.label}" never happened: ` +
+                `${interferer.failureReason()}`
+              : `${outcome.note} — "${scenario.interference!.label}" never happened: ` +
+                `the agent did not complete ${scenario.interference!.afterTool}, so ` +
+                "this journey did not exercise its target invariant")
           : /**
              * A journey whose target rule was withheld says so, rather than reading as a
              * clean completion. The fault may well have landed; there was simply no rule

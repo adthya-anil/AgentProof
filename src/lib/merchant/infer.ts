@@ -43,6 +43,15 @@ export interface InferenceInput {
   sample: unknown;
   /** Ids that were asked for, so the id path can be checked against reality. */
   requestedIds: readonly string[];
+  /**
+   * The declared configuration to build on, when there is one.
+   *
+   * Everything a model cannot infer from a single response — how to browse the catalogue,
+   * whether the merchant can be perturbed, whether it holds stock — is carried through from
+   * here rather than rebuilt. Optional, so a merchant being mapped from nothing still works;
+   * it simply has none of those capabilities, and says so.
+   */
+  base?: MerchantSchema;
 }
 
 export interface Rejection {
@@ -181,14 +190,32 @@ export async function inferMapping(
   const draft = parsed as Record<string, unknown>;
   const notes = typeof draft.notes === "string" ? draft.notes : "";
 
+  /**
+   * Inference replaces the field mappings and nothing else.
+   *
+   * This built a whole schema from scratch, and every field it did not know about was
+   * silently lost — the caller then patched selected ones back. That went wrong twice in the
+   * same way: `catalogue` was dropped, noticed, and patched; then `admin` was dropped and
+   * not noticed, so a merchant with working admin mutations reported "this merchant's prices
+   * cannot be moved" and two perturbation journeys came back untestable. Both times the
+   * missing field produced a plausible-sounding message rather than an error.
+   *
+   * Starting from the declared configuration and overriding only what a model can actually
+   * infer removes the whole class. Where a field lives in a response is inference; which
+   * endpoint to call, how to browse it, and whether it can be perturbed are configuration,
+   * and a model reading one response has nothing to say about any of them.
+   */
+  const base = input.base;
   const candidate = {
+    ...(base ?? {}),
     merchant: input.merchant,
     label: input.label,
     currency: "INR",
     transport: input.transport,
+    // The inferred half.
     product: draft.product,
     inventory: draft.inventory ?? {},
-    defaultCategory: draft.defaultCategory ?? "snack",
+    defaultCategory: draft.defaultCategory ?? base?.defaultCategory ?? "snack",
     /**
      * Versions are observed, never taken from a proposed path unless the model found a
      * real one. The engine can always track a price it can read, so preferring its own
@@ -197,7 +224,12 @@ export async function inferMapping(
      * prove it moves.
      */
     derive: { priceVersion: "observed", inventoryVersion: "observed" },
-    supportsReservations: false,
+    /**
+     * Never inferred, because a read-only response cannot show whether stock can be held.
+     * Taken from configuration, defaulting to false — claiming it would leave the inventory
+     * rule comparing a reservation that cannot exist.
+     */
+    supportsReservations: base?.supportsReservations ?? false,
   };
 
   const schemaResult = merchantSchema.safeParse(candidate);

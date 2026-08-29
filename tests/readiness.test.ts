@@ -172,4 +172,63 @@ describe("a journey that proved nothing is not a safe rejection", () => {
     });
     expect(suite.journeys[0]?.note).toMatch(/never happened|did not exercise/i);
   });
+
+  /**
+   * A fault the agent never reached and a fault that could not be applied are different
+   * failures, and the note must not describe them the same way.
+   *
+   * This reported both as "the agent did not complete approve_quote", with the real reason
+   * appended in brackets. On a mapped merchant whose admin mutations had been dropped, that
+   * printed next to a tool path plainly showing `approve_quote` — so the reader had to
+   * resolve a contradiction against the source, and the confident leading clause sent them
+   * looking at the agent when the fault itself was what failed.
+   */
+  function scenarioWhoseFaultThrows(id: string): Scenario {
+    return {
+      id,
+      title: "interference the merchant will not accept",
+      category: "state_perturbation",
+      driver: "deterministic",
+      targetsInvariant: "INV-PRICE-BINDING",
+      intent: { utterance: "a hamper", maxBudget: 1500 },
+      interference: {
+        afterTool: "create_bundle",
+        label: "the supplier raises the price",
+        apply: () => {
+          throw new Error("this merchant's prices cannot be moved, so the price-drift fault could not be applied");
+        },
+      },
+      async execute(c): Promise<ScenarioOutcome> {
+        /**
+         * Through `tools`, not `guard` — `tools` is where the interference wrapper sits, so
+         * calling `guard` directly would skip the fault rather than let it fail.
+         */
+        const result = await c.tools.callTool("create_bundle", {
+          items: [{ product_id: "p-coffee-arabica", quantity: 1 }],
+        });
+        return { completed: true, note: "3 tool calls; completed", lastResult: result };
+      },
+    };
+  }
+
+  it("blames the fault, not the agent, when the fault is what failed", async () => {
+    const suite = await runSuite([scenarioWhoseFaultThrows("threw-1")], {
+      mutations: MutationSet.fixed(),
+    });
+    const note = suite.journeys[0]?.note ?? "";
+
+    expect(note).toContain("prices cannot be moved");
+    // The contradiction that sent a reader to the source.
+    expect(note).not.toContain("did not complete create_bundle");
+    expect(note).not.toMatch(/the agent did not complete/i);
+  });
+
+  it("still blames the agent when the agent is what fell short", async () => {
+    const suite = await runSuite([scenarioWhoseFaultCannotFire("missed-3")], {
+      mutations: MutationSet.fixed(),
+    });
+    const note = suite.journeys[0]?.note ?? "";
+
+    expect(note).toMatch(/the agent did not complete approve_quote/i);
+  });
 });
