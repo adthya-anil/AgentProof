@@ -200,6 +200,27 @@ export const NORDWELL_MAPPING = {
     },
   },
   inventory: { available: "availability.quantity" },
+  /**
+   * How an agent browses Nordwell.
+   *
+   * A listing operation rather than a fixed id list, because that is what a real
+   * storefront offers and because a hard-coded set would quietly decide what is under
+   * test. `products` with no ids returns the whole catalogue.
+   */
+  catalogue: {
+    listQuery: `query All {
+  products {
+    id
+    title
+    collection
+    pricing { unit { amount currencyCode } floor { amount } }
+    availability { quantity }
+    dietary { contains tags }
+    giftable
+  }
+}`,
+    root: "products",
+  },
   // No version fields exist, so the engine keeps its own counters by observation.
   derive: { priceVersion: "observed", inventoryVersion: "observed" },
   // Nordwell has no reservation concept. Claiming otherwise would leave the inventory

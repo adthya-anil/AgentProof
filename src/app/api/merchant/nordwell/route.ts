@@ -92,17 +92,28 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ data: { resetCatalogue: true } });
   }
 
-  // The one query this service offers. Anything else is a schema error, which is what a
-  // real server would say rather than returning an empty list.
-  if (!/\bproducts\s*\(/.test(body.query)) {
+  // The one query this service offers, with or without an argument list — `products(ids:)`
+  // fetches, bare `products` browses. Matching only the parenthesised form rejected every
+  // listing query as an unknown field.
+  if (!/\bproducts\b/.test(body.query)) {
     return errors("Cannot query field other than 'products' on type 'Query'");
   }
 
+  /**
+   * `products` with no ids lists the catalogue.
+   *
+   * A browsing operation, distinct from the fetch-by-id path — an agent shopping this
+   * store has no ids to ask for until it has looked. Only a query that *declares* $ids is
+   * required to supply them, so a listing query is not treated as a malformed fetch.
+   */
+  const declaresIds = /\$ids\b/.test(body.query);
   const rawIds = body.variables?.ids;
-  if (!Array.isArray(rawIds)) {
+  if (declaresIds && !Array.isArray(rawIds)) {
     return errors("Variable '$ids' of required type '[ID!]!' was not provided");
   }
-  const ids = rawIds.filter((id): id is string => typeof id === "string");
+  const ids = Array.isArray(rawIds)
+    ? rawIds.filter((id): id is string => typeof id === "string")
+    : undefined;
 
   /**
    * Returned in the service's own order, not the caller's.
@@ -112,6 +123,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
    * product's price to another — a wrong price delivered with complete confidence. This
    * makes that bug fail immediately instead of in production.
    */
+  // `undefined` means "everything", which is what a listing asks for.
   const products = nordwellProducts(ids).reverse();
 
   return NextResponse.json({ data: { products } });

@@ -4,6 +4,7 @@ import { IdFactory } from "./core/ids.js";
 import { type LockManager } from "./core/lock.js";
 import { type Minor, rupees } from "./core/money.js";
 import type { PayableOrderRegistry } from "./core/payableOrder.js";
+import type { CatalogSource } from "./merchant/source.js";
 import type { BuyerIntent } from "./core/types.js";
 import { Guard } from "./guard/guard.js";
 import { MutationSet } from "./hamperhub/mutations.js";
@@ -17,6 +18,8 @@ import { loadPolicyFromFile, policyVersion } from "./policy/load.js";
 import type { Policy } from "./policy/schema.js";
 
 export interface Environment {
+  /** Set when the run targets a mapped merchant rather than the in-process one. */
+  catalog?: CatalogSource;
   clock: ManualClock;
   ids: IdFactory;
   state: MerchantState;
@@ -52,6 +55,43 @@ export interface EnvironmentOptions {
   payableOrders?: PayableOrderRegistry;
   /** Namespace for payable-order claims. One logical deployment per scope. */
   claimScope?: string;
+  /**
+   * The merchant under test, as a factory rather than an instance.
+   *
+   * A factory because a catalogue source has to be bound to *this* environment's state.
+   * Passing a pre-built instance looked fine and was quietly wrong: one source shared
+   * across a suite syncs the merchant into a state object no journey owns, so quotes were
+   * priced from one catalogue and verified against another. Every journey then tripped
+   * INV-PRICE-BINDING — including the clean one — and the run reported six unsafe
+   * violations and NOT READY, which reads exactly like a real finding about the merchant.
+   *
+   * Taking a factory makes the mistake unexpressible: the source cannot exist before the
+   * state it serves.
+   */
+  catalog?: (state: MerchantState) => CatalogSource;
+}
+
+/**
+ * Points a freshly built environment at its merchant.
+ *
+ * Separate from `createEnvironment` because loading someone else's catalogue is I/O and
+ * that factory is synchronous — and making it async would touch every caller for the
+ * benefit of the few that front a remote merchant.
+ *
+ * Priming matters more than it looks. The agent's first move is `search_products`, which
+ * reads local state, so an environment that has not been loaded from the merchant shows
+ * the agent HamperHub's shelves no matter which mapping is configured. That failure is
+ * invisible: the journey runs, the invariants pass, and the report describes a merchant
+ * nobody tested.
+ */
+export async function prepareEnvironment(env: Environment): Promise<Environment> {
+  const source = env.catalog;
+  if (!source) return env;
+
+  const ids = await source.listIds();
+  await source.prime(ids);
+  env.guard.setCatalogSource(source);
+  return env;
 }
 
 /**
@@ -113,6 +153,7 @@ export function createEnvironment(opts: EnvironmentOptions = {}): Environment {
   });
 
   return {
+    ...(opts.catalog ? { catalog: opts.catalog(state) } : {}),
     clock,
     ids,
     state,

@@ -29,6 +29,20 @@ export interface CatalogSource {
    * cached snapshot" comment is protecting.
    */
   viewFor(productIds: readonly string[]): Promise<LiveCatalogView>;
+  /**
+   * Every product the merchant sells.
+   *
+   * Needed by any run that begins with a search rather than with a known basket, which is
+   * every agent-driven journey.
+   */
+  listIds(): Promise<string[]>;
+  /**
+   * Loads the merchant's catalogue as the starting state for a run.
+   *
+   * On the interface rather than only on the adapter, so a caller never has to know which
+   * kind of merchant it holds in order to set one up correctly.
+   */
+  prime(productIds: readonly string[]): Promise<void>;
 }
 
 /**
@@ -55,6 +69,21 @@ export class LocalCatalogSource implements CatalogSource {
     // The live object itself, not a copy. Re-reading is instantaneous in-process, and
     // copying would introduce the cached snapshot the design forbids.
     return this.state;
+  }
+
+  async prime(_productIds: readonly string[] = []): Promise<void> {
+    // Already loaded: MerchantState seeds itself from the catalogue it ships with. The
+    // parameter is accepted and ignored so a caller never has to know which kind of
+    // source it is holding in order to set one up correctly.
+  }
+
+  async listIds(): Promise<string[]> {
+    // The in-process merchant is already fully loaded, so this is just what it holds.
+    return "listProducts" in this.state
+      ? (this.state as { listProducts(): Array<{ id: string }> })
+          .listProducts()
+          .map((p) => p.id)
+      : [];
   }
 }
 
@@ -116,6 +145,10 @@ export class AdapterCatalogSource implements CatalogSource {
       stock.set(product.id, snapshot.getInventory(product.id)?.available ?? 0);
     }
     this.state.loadCatalog(products, stock);
+  }
+
+  async listIds(): Promise<string[]> {
+    return this.adapter.listIds();
   }
 
   async viewFor(productIds: readonly string[]): Promise<LiveCatalogView> {
