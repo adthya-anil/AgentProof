@@ -717,3 +717,14 @@ ol.live pre {
 .finding > div + div {
   margin-top: 0.2rem;
 }
+
+/*
+ * Inconclusive is its own state, deliberately not red.
+ *
+ * "We could not tell" and "we found defects" are opposite claims, and sharing a colour
+ * would send a reader hunting for a bug no journey reported.
+ */
+.readiness.inconclusive {
+  border-color: var(--warn, #b58900);
+  color: var(--warn, #b58900);
+}
