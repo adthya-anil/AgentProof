@@ -1,0 +1,7 @@
+{
+  "task_id": "task-fix-report-bugs",
+  "task_description": "Fix three confirmed reporting bugs in AgentProof (money double-counting on multi-invariant orders; hardcoded perturbation target causing false live passes; inconclusive footnote conflating two fault causes), each with a test proven to bite. Diagnose the suspicious-passed live journeys and fix if mislabelled. Then systematically stress-test the entire app over its real HTTP routes, all 9 dashboard pages, demo scripts, Postgres persistence, audit chain and concurrency, fixing any further bugs the same way. Keep HamperHub's frozen numbers (8/10/2/5 -> 11/13/1/0, 12/12) intact and update the README test count.",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004", "FEAT-005", "FEAT-006"],
+  "blocked_reason": null
+}
