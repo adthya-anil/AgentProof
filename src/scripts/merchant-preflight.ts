@@ -1,4 +1,4 @@
-import { llmPoolFromEnv } from "../lib/agent/factory.js";
+import { assignRoles, llmPoolFromEnv } from "../lib/agent/factory.js";
 import { loadDotEnv } from "../lib/core/env.js";
 import { formatMinor } from "../lib/core/money.js";
 import { MutationSet } from "../lib/hamperhub/mutations.js";
@@ -8,7 +8,8 @@ import { AdapterCatalogSource } from "../lib/merchant/source.js";
 import { transportFor } from "../lib/merchant/transport.js";
 import { NORDWELL_MAPPING } from "../lib/merchants/nordwell.js";
 import { createEnvironment } from "../lib/harness.js";
-import { agentDrivenScenarios } from "../lib/scenarios/agentDriven.js";
+import { loadPolicyFromFile } from "../lib/policy/load.js";
+import { assembleSuite } from "../lib/scenarios/index.js";
 import { runSuite } from "../lib/runner/run.js";
 
 /**
@@ -92,11 +93,36 @@ async function main(): Promise<void> {
     );
   }
 
-  const scenarios = agentDrivenScenarios({
+  /**
+   * The whole agent-driven half, composed the same way a real preflight composes it.
+   *
+   * Hand-assembling only the live goals left two families out for no reason: the four
+   * transport perturbations are faults in the *transport* — a duplicated delivery, a
+   * replayed approval — and name no products at all, and the adversary's generated goals
+   * are natural language. Both were always portable; they were simply not wired in, so
+   * Nordwell ran 11 journeys where it could run 18.
+   *
+   * `assembleSuite` with mode "agent" drops the twelve deterministic reproductions, which
+   * is the one family that genuinely cannot port: they name exact products and earn their
+   * keep as precise sequences against a known catalogue.
+   */
+  const { adversary } = assignRoles(pool, "split");
+  const composed = await assembleSuite({
+    mode: "agent",
+    llm: pool[0]!,
     llms: pool,
+    ...(adversary ? { adversary } : {}),
+    policy: loadPolicyFromFile(),
     maxToolCalls: 24,
-    pairing: "round-robin",
   });
+  const scenarios = composed.scenarios;
+
+  console.log(
+    `  Composition     ${composed.perturbationCount} perturbation · ` +
+      `${composed.liveCount} live goal · ${composed.generatedCount} adversary-written`,
+  );
+  console.log(`  Adversary       ${composed.roles.adversary}`);
+  console.log(`  Buyers          ${composed.roles.buyers.join(" · ")}`);
 
   /**
    * Both integration variants, against the same mapped merchant.
