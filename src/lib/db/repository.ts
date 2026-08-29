@@ -17,6 +17,8 @@ export interface PersistContext {
   integrationVariant: string;
   generatorModel: string | null;
   generatorIsReal: boolean;
+  /** The model given the adversary role, when roles were split. Null when they were not. */
+  adversaryModel?: string | null;
   paymentAdapter: string | null;
   merchant?: Merchant;
 }
@@ -51,12 +53,12 @@ export async function persistSuite(
     await client.query(
       `insert into suites (
          id, label, policy_version, merchant_id, mutations, integration_variant,
-         generator_model, generator_is_real, payment_adapter,
+         generator_model, generator_is_real, adversary_model, payment_adapter,
          passed, safely_rejected, escalated, unsafe_violations, inconclusive,
          errored,
          money_critical_escapes, money_at_risk_minor, audit_chain_ok, readiness,
          duration_ms, metrics, result
-       ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
+       ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
       [
         suiteId,
         suite.runId,
@@ -66,6 +68,7 @@ export async function persistSuite(
         ctx.integrationVariant,
         ctx.generatorModel,
         ctx.generatorIsReal,
+        ctx.adversaryModel ?? null,
         ctx.paymentAdapter,
         suite.passed,
         suite.safelyRejected,

@@ -58,7 +58,14 @@ interface Summary {
   unsafeViolations: number;
   inconclusive: number;
   errored: number;
+  /** Money on journeys something actually stopped. Not the total at risk. */
   moneyAtRisk: string;
+  /** Money that got through, when any did. Null when nothing did. */
+  moneyNotPrevented: string | null;
+  /** Journeys that exercised an invariant — what readiness turns on. */
+  decidedJourneys: number;
+  /** Why the inconclusive journeys proved nothing, or null when none did. */
+  inconclusiveNote: string | null;
   readiness: string;
   auditChainOk: boolean;
   durationMs: number;
@@ -429,9 +436,20 @@ export function MerchantConsole() {
               {summary.inconclusive}
             </div>
             <div>
-              <span>Money at risk</span>
+              <span>At risk, prevented</span>
               {summary.moneyAtRisk}
             </div>
+            {/*
+              Only shown when there is something to admit. Folding it into one "money at
+              risk" figure labelled prevented would take credit for the money that got
+              through, which is the opposite of what happened.
+            */}
+            {summary.moneyNotPrevented && (
+              <div>
+                <span>At risk, NOT prevented</span>
+                {summary.moneyNotPrevented}
+              </div>
+            )}
             <div>
               <span>Audit chain</span>
               {summary.auditChainOk ? "intact" : "BROKEN"}
@@ -461,12 +479,24 @@ export function MerchantConsole() {
               here would be the exact false assurance this engine exists to prevent.
             </p>
           )}
-          {summary.inconclusive > 0 && (
-            <p className="meta">
-              {summary.inconclusive} journey(s) ended inconclusive — the agent ran out of
-              tool budget or declined to proceed, so nothing was verified. Excluded from
-              coverage rather than counted as safe.
-            </p>
+          {/*
+            The number the readiness verdict is actually decided by. Without it, READY and
+            INCONCLUSIVE are indistinguishable to the reader, who can see neither the
+            threshold nor which side of it this run fell.
+          */}
+          <p className="meta">
+            {summary.decidedJourneys} of {summary.journeys} journeys put at least one
+            invariant to work, which is what readiness is judged on. Below half and the
+            run is reported inconclusive rather than ready, however clean it looks.
+          </p>
+          {/*
+            Was a fixed sentence blaming tool budget or a declining agent. That is false
+            for a journey which ran to completion and was inconclusive only because its
+            invariant cannot run against this merchant — it charged a limitation of the
+            merchant to the agent, in the one line a reader goes to for the reason.
+          */}
+          {summary.inconclusiveNote && (
+            <p className="meta">{summary.inconclusiveNote}</p>
           )}
         </div>
       )}

@@ -264,6 +264,7 @@ export interface StoredSuiteSnapshot {
   integration_variant: string;
   generator_model: string | null;
   generator_is_real: boolean;
+  adversary_model: string | null;
   payment_adapter: string | null;
   created_at: Date;
   duration_ms: number;
@@ -290,7 +291,7 @@ export async function latestSuiteFor(
 ): Promise<StoredSuiteSnapshot | null> {
   const rows = await db.query<StoredSuiteSnapshot>(
     `select id, label, integration_variant, generator_model, generator_is_real,
-            payment_adapter, created_at, duration_ms, result
+            adversary_model, payment_adapter, created_at, duration_ms, result
        from suites
       where integration_variant = $1 and result is not null
       order by created_at desc
@@ -307,7 +308,7 @@ export async function recentSuiteSnapshots(
 ): Promise<StoredSuiteSnapshot[]> {
   return db.query<StoredSuiteSnapshot>(
     `select id, label, integration_variant, generator_model, generator_is_real,
-            payment_adapter, created_at, duration_ms, result
+            adversary_model, payment_adapter, created_at, duration_ms, result
        from suites
       where result is not null
       order by created_at desc

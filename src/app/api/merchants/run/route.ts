@@ -13,6 +13,10 @@ import { NORDWELL_MAPPING } from "@/lib/merchants/nordwell";
 import { CAPABILITIES, describeCapability } from "@/lib/policy/capabilities";
 import { loadPolicyFromFile } from "@/lib/policy/load";
 import { runSuite } from "@/lib/runner/run";
+import {
+  describeInconclusive,
+  inconclusiveBreakdown,
+} from "@/lib/report/inconclusive";
 import { assembleSuite } from "@/lib/scenarios/index";
 
 /**
@@ -297,7 +301,17 @@ export async function POST(request: NextRequest): Promise<Response> {
             unsafeViolations: suite.unsafeViolations,
             inconclusive: suite.inconclusive,
             errored: suite.errored,
-            moneyAtRisk: formatMinor(suite.moneyAtRiskMinor),
+            moneyAtRisk: formatMinor(suite.moneyPreventedMinor),
+            moneyNotPrevented:
+              suite.moneyNotPreventedMinor > 0
+                ? formatMinor(suite.moneyNotPreventedMinor)
+                : null,
+            decidedJourneys: suite.decidedJourneys,
+            // The reason each inconclusive journey proved nothing, computed where the
+            // journeys are, so the page cannot invent a cause it has no data for.
+            inconclusiveNote: describeInconclusive(
+              inconclusiveBreakdown(suite.journeys),
+            ),
             readiness: suite.readiness,
             auditChainOk: suite.auditChainOk,
             durationMs: suite.durationMs,

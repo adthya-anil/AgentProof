@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { MutationSet } from "../src/lib/hamperhub/mutations.js";
 import { loadPolicyFromFile } from "../src/lib/policy/load.js";
@@ -172,5 +173,75 @@ describe("a revived suite is usable, not merely present", () => {
     expect((completed!.output as { disposition: string }).disposition).toBe(
       journey.disposition,
     );
+  });
+});
+
+
+/**
+ * Run metadata has to survive the trip through Postgres, not just the fields with columns.
+ *
+ * `adversaryModel` had no column. It lived on the in-memory record and vanished on the way
+ * back, so a run read from the database always looked like one where roles were never split.
+ * The report branches on that field: with an adversary it presents the per-model table as a
+ * breakdown by role and says plainly that it is not a comparison; without one it claims every
+ * live goal was attempted by every model. So a split run — one buyer with fifteen journeys,
+ * one adversary with three, on disjoint scenarios — printed a cross-product claim above a
+ * table that disproved it, and invited the reader to read a role difference as a safety
+ * difference.
+ *
+ * Skipped without `DATABASE_URL` rather than passed, because the whole point is the round
+ * trip. A version of this that quietly passed with no database would have caught nothing.
+ */
+const describeDb = process.env.DATABASE_URL ? describe : describe.skip;
+
+describeDb("metadata round-trips through the database", () => {
+  /** A variant nothing else uses, so a shared database cannot decide the result. */
+  function isolatedVariant(): IntegrationVariant {
+    return `adversary-probe-${randomUUID()}` as IntegrationVariant;
+  }
+
+  async function recordWith(
+    variant: IntegrationVariant,
+    adversaryModel: string | null,
+  ) {
+    const suite = await smallSuite();
+    return recordRun({
+      variant,
+      suite,
+      startedAt: Date.now() - suite.durationMs,
+      model: "openai:gpt-5.6-sol + anthropic:claude-opus-5",
+      modelIsReal: true,
+      adversaryModel,
+      paymentAdapter: "simulated",
+      regressionCount: 3,
+      perturbationCount: 0,
+      liveCount: 0,
+      generatedCount: 0,
+      policy: loadPolicyFromFile(),
+    });
+  }
+
+  it("restores the adversary model after the cache is gone", async () => {
+    const variant = isolatedVariant();
+    const stored = await recordWith(variant, "anthropic:claude-opus-5");
+    expect(stored.persistedSuiteId).not.toBeNull();
+
+    // Forces the hydrate path — the one that used to drop the field.
+    clearRuns();
+    const read = await getLatestRun(variant);
+
+    expect(read).not.toBeNull();
+    expect(read!.adversaryModel).toBe("anthropic:claude-opus-5");
+  });
+
+  it("keeps a compare run's absent adversary absent, rather than inventing one", async () => {
+    const variant = isolatedVariant();
+    await recordWith(variant, null);
+
+    clearRuns();
+    const read = await getLatestRun(variant);
+
+    expect(read).not.toBeNull();
+    expect(read!.adversaryModel).toBeNull();
   });
 });

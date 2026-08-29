@@ -176,6 +176,9 @@ function toStoredRun(row: StoredSuiteSnapshot): StoredRun | null {
     finishedAt,
     model: row.generator_model ?? "unknown",
     modelIsReal: row.generator_is_real,
+    // Restored from its own column. Without it a split run reads back as a compare run,
+    // and the report claims a cross-product it never performed.
+    adversaryModel: row.adversary_model ?? null,
     paymentAdapter: row.payment_adapter ?? "unknown",
     // Composition counts are not stored separately; derive them from the journeys
     // so the report header stays truthful rather than showing zeroes.
@@ -267,6 +270,7 @@ export async function recordRun(input: RecordRunInput): Promise<StoredRun> {
           integrationVariant: input.variant,
           generatorModel: input.model,
           generatorIsReal: input.modelIsReal,
+          adversaryModel: input.adversaryModel ?? null,
           paymentAdapter: input.paymentAdapter,
         });
         stored.persistedSuiteId = suiteId;

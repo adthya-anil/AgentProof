@@ -61,6 +61,8 @@ interface DoneSummary {
   runId: string;
   persistedSuiteId: string | null;
   readiness: string;
+  /** Total journeys, so the decided figure has a stated denominator. */
+  journeys: number;
   passed: number;
   safelyRejected: number;
   escalated: number;
@@ -70,7 +72,14 @@ interface DoneSummary {
   byModel: ModelBreakdown[];
   errored: number;
   escapes: number;
+  /** Money on journeys something actually stopped. Not the total at risk. */
   moneyAtRisk: number;
+  /** Money that got through, when any did. Null when nothing did. */
+  moneyNotPrevented: number | null;
+  /** Journeys that exercised an invariant — what readiness turns on. */
+  decidedJourneys: number;
+  /** Why the inconclusive journeys proved nothing, or null when none did. */
+  inconclusiveNote: string | null;
   durationMs: number;
 }
 
@@ -536,6 +545,17 @@ export default function PreflightConsole({
               <div className="n">₹{summary.moneyAtRisk}</div>
               <div className="k">At risk, prevented</div>
             </div>
+            {/*
+              An unsafe violation is a journey the Guard did not stop, so its money was
+              never prevented. Reporting one total labelled "prevented" took credit for
+              exactly the failures the run exists to find.
+            */}
+            {summary.moneyNotPrevented !== null && (
+              <div className="stat bad">
+                <div className="n">₹{summary.moneyNotPrevented}</div>
+                <div className="k">At risk, NOT prevented</div>
+              </div>
+            )}
           </div>
 
           {summary.byModel.length > 1 && (
@@ -611,14 +631,21 @@ export default function PreflightConsole({
             </>
           )}
 
-          {summary.inconclusive > 0 && (
+          {/* The figure readiness is actually decided by, so the verdict can be checked. */}
+          <p className="note" style={{ marginTop: "1rem", marginBottom: 0 }}>
+            {summary.decidedJourneys} of {summary.journeys} journeys put at least one
+            invariant to work, which is what the readiness verdict is judged on. Below
+            half and a clean run is reported inconclusive rather than ready.
+          </p>
+
+          {/*
+            Was a fixed sentence blaming tool budget or a model failure. Neither applies
+            to a journey that completed and was inconclusive only because its invariant
+            cannot run against the merchant under test.
+          */}
+          {summary.inconclusiveNote && (
             <p className="note" style={{ marginTop: "1rem", marginBottom: 0 }}>
-              {summary.inconclusive} of {summary.agentDriven} live-agent journey
-              {summary.inconclusive === 1 ? "" : "s"} ended{" "}
-              <strong>inconclusive</strong> — the agent ran out of tool budget or
-              the model failed before anything decided the outcome. Those journeys
-              verified nothing and are excluded from coverage rather than counted
-              as safe.
+              {summary.inconclusiveNote}
             </p>
           )}
 
