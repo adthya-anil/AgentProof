@@ -28,7 +28,7 @@ an API key or network access unless you explicitly opt in.
 
 ```bash
 npm install
-npm test                    # 522 tests (2 need DATABASE_URL)
+npm test                    # 524 tests (2 need DATABASE_URL)
 npm run typecheck
 
 npm run demo:happy          # successful ₹1,399 transaction
@@ -331,8 +331,9 @@ moves and returns *between two checkpoints* is never observed. Native and
 ### The mapping can be written by a model
 
 Authoring the mapping is the slow part of onboarding a merchant: someone has to read an
-unfamiliar response and work out which field is the price. `npm run demo:infer` hands one
-response to a model and asks it, then refuses to believe the answer:
+unfamiliar response and work out which field is the price. **Merchants → Infer the
+mapping with a model** does it in the browser, or `npm run demo:infer` from a terminal.
+Either hands one response to a model and asks, then refuses to believe the answer:
 
 ```
   Price path         pricing.unit.amount
@@ -1183,7 +1184,7 @@ src/app/api/preflight/          Suite runner as a server-sent event stream
 src/app/                        Next.js dashboard (server components elsewhere)
 src/scripts/                    Runnable demos and database tooling
 scripts/dev-db.sh               Local Postgres for development
-tests/                          522 tests
+tests/                          524 tests
 ```
 
 Money is an integer count of paise throughout. Float rupees are banned: an

@@ -50,9 +50,52 @@ interface Result {
   };
 }
 
+interface Verdict {
+  total: number;
+  blocked: boolean;
+  fired: string[];
+  withheld: string[];
+}
+
+interface InferResult {
+  ok: boolean;
+  reason?: "no-model" | "rejected" | "error";
+  error?: string;
+  model?: string;
+  problems?: string[];
+  proposal?: unknown;
+  mapping?: Record<string, string | null>;
+  priceForReview?: string;
+  capabilities?: string[];
+  derivedCapabilities?: string[];
+  notes?: string;
+  handWritten?: Verdict;
+  modelWritten?: Verdict;
+  agree?: boolean;
+}
+
 export function MerchantConsole() {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
+  const [inferring, setInferring] = useState(false);
+  const [inferred, setInferred] = useState<InferResult | null>(null);
+
+  async function infer() {
+    setInferring(true);
+    setInferred(null);
+    try {
+      const response = await fetch("/api/merchants/infer", { method: "POST" });
+      setInferred((await response.json()) as InferResult);
+    } catch (error) {
+      setInferred({
+        ok: false,
+        reason: "error",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setInferring(false);
+    }
+  }
 
   async function run() {
     setRunning(true);
@@ -236,6 +279,151 @@ export function MerchantConsole() {
             {result.reprice?.reason && (
               <pre className="mono">{result.reprice.reason}</pre>
             )}
+          </div>
+        </>
+      )}
+
+      <div className="panel">
+        <h2>Let a model write the mapping</h2>
+        <p className="lead">
+          The mapping above was written by hand — someone read Nordwell&rsquo;s response
+          and worked out which field was the price. A model does that in seconds. It is
+          also capable of being confidently wrong about it, and that field is the amount a
+          buyer is charged. So the model <strong>proposes</strong>, and deterministic code
+          decides: a proposal is accepted only by being used to build a real product from
+          real rows, through the same strict readers the hand-written path uses.
+        </p>
+        <button className="primary" onClick={infer} disabled={inferring}>
+          {inferring ? "Asking the model…" : "Infer the mapping with a model"}
+        </button>
+        {inferring && (
+          <p className="meta">
+            One model call, then two full journeys — the inferred mapping and the
+            hand-written one, so the verdicts can be compared.
+          </p>
+        )}
+      </div>
+
+      {inferred && !inferred.ok && inferred.reason === "no-model" && (
+        <div className="panel">
+          <h2>No model configured</h2>
+          <p className="lead">
+            Refusing rather than substituting a scripted stub — inferring a mapping from a
+            canned reply would demonstrate nothing while looking like it had.
+          </p>
+          <pre className="mono">{inferred.error}</pre>
+        </div>
+      )}
+
+      {inferred && !inferred.ok && inferred.reason === "rejected" && (
+        <div className="panel">
+          <h2>Proposal rejected — nothing was run against it</h2>
+          <p className="lead">
+            This is the mechanism working, and it is the more reassuring of the two
+            outcomes to watch. The model asserted something the response does not support,
+            and validation refused it. The alternative is a mapping that reads the wrong
+            field and reports confident verdicts about the wrong amount of money.
+          </p>
+          <ul className="trace">
+            {inferred.problems?.map((problem, index) => (
+              <li key={index} data-tone="blocked">
+                {problem}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {inferred && !inferred.ok && inferred.reason === "error" && (
+        <div className="panel">
+          <h2>Could not complete the inference</h2>
+          <pre className="mono">{inferred.error}</pre>
+        </div>
+      )}
+
+      {inferred?.ok && (
+        <>
+          <div className="panel">
+            <h2>What the model proposed</h2>
+            <p className="lead">
+              Written by <span className="mono">{inferred.model}</span> from one response,
+              and accepted only after a real product was built with these paths.
+            </p>
+            <table>
+              <thead>
+                <tr>
+                  <th>Field</th>
+                  <th>Path the model chose</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(inferred.mapping ?? {}).map(([field, path]) => (
+                  <tr key={field}>
+                    <td>{field}</td>
+                    <td className="mono">{path ?? "not mapped"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="meta">
+              <div>
+                <span>Capabilities</span>
+                {inferred.capabilities?.length} of 8
+              </div>
+              <div>
+                <span>Engine-tracked</span>
+                {inferred.derivedCapabilities?.join(", ") || "none"}
+              </div>
+            </div>
+            {/*
+              The one thing validation cannot settle, so it is put in front of a person
+              rather than assumed. Nothing in "649.00" says whether the merchant means
+              ₹649.00 or ₹6.49, and both readings are self-consistent.
+            */}
+            <p className="lead" style={{ marginBottom: 0 }}>
+              Inferred price: <strong>{inferred.priceForReview}</strong> — a human
+              confirms this. Nothing in the data distinguishes ₹649.00 from ₹6.49, so the
+              unit is the one judgement left to you.
+            </p>
+            {inferred.notes && (
+              <p className="meta">Model&rsquo;s notes: {inferred.notes}</p>
+            )}
+          </div>
+
+          <div className="panel">
+            <h2>Same journey, both mappings</h2>
+            <table>
+              <thead>
+                <tr>
+                  <th>Mapping</th>
+                  <th>Total</th>
+                  <th>Checkout</th>
+                  <th>Fired</th>
+                  <th>Withheld</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(
+                  [
+                    ["hand-written", inferred.handWritten],
+                    ["model-written", inferred.modelWritten],
+                  ] as const
+                ).map(([label, verdict]) => (
+                  <tr key={label}>
+                    <td>{label}</td>
+                    <td>₹{verdict?.total}</td>
+                    <td>{verdict?.blocked ? "blocked" : "allowed"}</td>
+                    <td className="mono">{verdict?.fired.join(", ") || "—"}</td>
+                    <td className="mono">{verdict?.withheld.join(", ") || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="lead" style={{ marginBottom: 0 }}>
+              {inferred.agree
+                ? "Identical verdicts. A mapping a model wrote from one response reached the same conclusions as the one written by hand — including catching the price move against a merchant that publishes no version field."
+                : "The two mappings disagree. Shown rather than reconciled: a difference here means the model read a different field, and which one is right is not something this page should decide."}
+            </p>
           </div>
         </>
       )}
