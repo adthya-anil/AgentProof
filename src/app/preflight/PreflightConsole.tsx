@@ -485,11 +485,19 @@ export default function PreflightConsole({
           <h2>Result</h2>
           <div
             className={`readiness ${
-              summary.readiness === "READY FOR CONTROLLED TEST" ? "ready" : "notready"
+              summary.readiness === "READY FOR CONTROLLED TEST"
+                ? "ready"
+                : summary.readiness === "INCONCLUSIVE"
+                  ? "inconclusive"
+                  : "notready"
             }`}
           >
             <span>
-              {summary.readiness === "READY FOR CONTROLLED TEST" ? "✓" : "✗"}
+              {summary.readiness === "READY FOR CONTROLLED TEST"
+                ? "✓"
+                : summary.readiness === "INCONCLUSIVE"
+                  ? "?"
+                  : "✗"}
             </span>
             <div>
               {summary.readiness}

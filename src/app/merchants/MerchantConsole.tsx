@@ -453,6 +453,14 @@ export function MerchantConsole() {
                 `is reported as not run, never counted as a pass it did not earn.`
               : "All twelve invariants ran against this merchant."}
           </p>
+          {summary.readiness === "INCONCLUSIVE" && (
+            <p className="lead">
+              <strong>Inconclusive, not clean.</strong> No defects were found and not
+              enough was verified to call that a result — either no invariant was
+              exercised, or most journeys ended without deciding anything. A green tick
+              here would be the exact false assurance this engine exists to prevent.
+            </p>
+          )}
           {summary.inconclusive > 0 && (
             <p className="meta">
               {summary.inconclusive} journey(s) ended inconclusive — the agent ran out of

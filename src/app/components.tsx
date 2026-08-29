@@ -90,16 +90,29 @@ export function Readiness({
   unsafe: number;
   escapes: number;
 }) {
+  /**
+   * Three states, because inconclusive is not a failure.
+   *
+   * A boolean here would render "we could not tell" with the same red cross as "we found
+   * defects", which are opposite claims: one is a finding about the integration, the other
+   * is the absence of one. Marking thin evidence as a failure would push a reader to go
+   * looking for a bug that no journey reported.
+   */
   const ready = readiness === "READY FOR CONTROLLED TEST";
+  const inconclusive = readiness === "INCONCLUSIVE";
   return (
-    <div className={`readiness ${ready ? "ready" : "notready"}`}>
-      <span>{ready ? "✓" : "✗"}</span>
+    <div
+      className={`readiness ${ready ? "ready" : inconclusive ? "inconclusive" : "notready"}`}
+    >
+      <span>{ready ? "✓" : inconclusive ? "?" : "✗"}</span>
       <div>
         {readiness}
         <small>
           {ready
             ? "A readiness report, not a certification — no finite suite proves the absence of defects, which is why the Guard stays active at runtime."
-            : `${unsafe} unsafe violation${unsafe === 1 ? "" : "s"}, ${escapes} money-critical escape${escapes === 1 ? "" : "s"}. Fix these before exposing the integration to AI buyers.`}
+            : inconclusive
+              ? "No defects were found, and not enough was verified to call that a result. Either no invariant was exercised or most journeys ended without deciding anything — so this says nothing about the integration either way."
+              : `${unsafe} unsafe violation${unsafe === 1 ? "" : "s"}, ${escapes} money-critical escape${escapes === 1 ? "" : "s"}. Fix these before exposing the integration to AI buyers.`}
         </small>
       </div>
     </div>
