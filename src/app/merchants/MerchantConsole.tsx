@@ -1,13 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 /**
- * Runs the twelve invariants against Nordwell and shows what happened.
+ * A third-party catalogue, mapped by a model, then actually tested.
  *
- * On demand rather than on page load. The run makes real HTTP calls to a second
- * merchant and re-prices its catalogue, and a page that did that on every visit would
- * be doing surprising work for anyone who merely navigated here.
+ * What was here before ran two hardcoded journeys — fixed product ids, fixed tool order —
+ * and displayed the result as though a merchant had been tested. It had not been. The
+ * inferred mapping was never used for anything except agreeing with the hand-written one on
+ * that same script, so the two features that mattered never met.
+ *
+ * This runs the whole claim in one pass: read one response from the merchant, let a model
+ * write the mapping, refuse it if validation cannot verify it, browse the catalogue through
+ * it, then put real agents in front of the shop and judge them with the same twelve
+ * invariants and the same readiness rule HamperHub is judged by.
+ *
+ * Streamed, because that takes minutes. Every journey appears as it finishes rather than
+ * after the whole run, which also means a run that dies halfway still shows what it learned.
  */
 
 interface CapabilityRow {
@@ -17,315 +26,238 @@ interface CapabilityRow {
   derived: boolean;
 }
 
-interface Result {
-  ok: boolean;
-  error?: string;
-  endpoint?: string;
-  merchant?: { label: string; transport: string; endpoint: string };
-  capabilities?: CapabilityRow[];
-  capabilityCount?: number;
-  capabilityTotal?: number;
-  catalogue?: Array<{
-    id: string;
-    name: string;
-    price: string;
-    stock: number;
-    vegan: boolean | null;
-    allergens: string[] | null;
-    category: string;
-  }>;
-  clean?: {
-    steps: Array<{ label: string; detail: string; tone: string }>;
-    total: number;
-    allowed: boolean;
-    violations: number;
-    withheld: string[];
-  };
-  reprice?: {
-    quotedAt: number;
-    newPrice: number;
-    blocked: boolean;
-    reason: string | null;
-    fired: string[];
-  };
+interface Product {
+  id: string;
+  name: string;
+  price: string;
+  stock: number;
+  vegan: boolean | null;
+  allergens: string[] | null;
+  category: string;
 }
 
-interface Verdict {
+interface Journey {
+  index: number;
   total: number;
-  blocked: boolean;
+  id: string;
+  title: string;
+  model: string | null;
+  disposition: string;
+  note: string;
   fired: string[];
+  withheld: string[];
+  moneyAtRisk: string;
+  toolPath: string[];
+}
+
+interface Summary {
+  journeys: number;
+  passed: number;
+  safelyRejected: number;
+  escalated: number;
+  unsafeViolations: number;
+  inconclusive: number;
+  errored: number;
+  moneyAtRisk: string;
+  readiness: string;
+  auditChainOk: boolean;
+  durationMs: number;
   withheld: string[];
 }
 
-interface InferResult {
-  ok: boolean;
-  reason?: "no-model" | "rejected" | "error";
-  error?: string;
-  model?: string;
-  problems?: string[];
-  proposal?: unknown;
-  mapping?: Record<string, string | null>;
-  priceForReview?: string;
-  capabilities?: string[];
-  derivedCapabilities?: string[];
-  notes?: string;
-  handWritten?: Verdict;
-  modelWritten?: Verdict;
-  agree?: boolean;
+interface Mapping {
+  paths: Record<string, string | null>;
+  priceForReview: string;
+  notes: string;
+  capabilities: CapabilityRow[];
+  capabilityCount: number;
+  capabilityTotal: number;
 }
+
+const TONE: Record<string, string> = {
+  passed: "ok",
+  safely_rejected: "neutral",
+  escalated: "warn",
+  unsafe_violation: "blocked",
+  inconclusive: "warn",
+  errored: "blocked",
+};
 
 export function MerchantConsole() {
   const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<Result | null>(null);
-  const [inferring, setInferring] = useState(false);
-  const [inferred, setInferred] = useState<InferResult | null>(null);
+  const [phase, setPhase] = useState<string | null>(null);
+  const [roles, setRoles] = useState<{ adversary: string | null; buyers: string[] } | null>(
+    null,
+  );
+  const [mapping, setMapping] = useState<Mapping | null>(null);
+  const [catalogue, setCatalogue] = useState<Product[] | null>(null);
+  const [assembled, setAssembled] = useState<{
+    total: number;
+    perturbations: number;
+    live: number;
+    generated: number;
+  } | null>(null);
+  const [journeys, setJourneys] = useState<Journey[]>([]);
+  const [current, setCurrent] = useState<string | null>(null);
+  const [summary, setSummary] = useState<Summary | null>(null);
+  const [rejected, setRejected] = useState<{ problems: string[]; message: string } | null>(
+    null,
+  );
+  const [error, setError] = useState<string | null>(null);
+  const abort = useRef<AbortController | null>(null);
 
-  async function infer() {
-    setInferring(true);
-    setInferred(null);
-    try {
-      const response = await fetch("/api/merchants/infer", { method: "POST" });
-      setInferred((await response.json()) as InferResult);
-    } catch (error) {
-      setInferred({
-        ok: false,
-        reason: "error",
-        error: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      setInferring(false);
-    }
+  function reset() {
+    setPhase(null);
+    setRoles(null);
+    setMapping(null);
+    setCatalogue(null);
+    setAssembled(null);
+    setJourneys([]);
+    setCurrent(null);
+    setSummary(null);
+    setRejected(null);
+    setError(null);
   }
 
-  async function run() {
+  async function run(size: "quick" | "standard") {
+    reset();
     setRunning(true);
-    setResult(null);
+    const controller = new AbortController();
+    abort.current = controller;
+
     try {
-      const response = await fetch("/api/merchants", { method: "POST" });
-      setResult((await response.json()) as Result);
-    } catch (error) {
-      setResult({
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
+      const response = await fetch(`/api/merchants/run?size=${size}`, {
+        method: "POST",
+        signal: controller.signal,
       });
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("no response stream");
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE frames are separated by a blank line; a partial frame stays buffered.
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) {
+          const line = frame.split("\n").find((l) => l.startsWith("data: "));
+          if (!line) continue;
+          const event = JSON.parse(line.slice(6)) as Record<string, unknown>;
+
+          switch (event.kind) {
+            case "start":
+              setRoles({
+                adversary: (event.adversary as string | null) ?? null,
+                buyers: (event.buyers as string[]) ?? [],
+              });
+              break;
+            case "phase":
+              setPhase(event.label as string);
+              break;
+            case "mapping":
+              setMapping(event as unknown as Mapping);
+              break;
+            case "catalogue":
+              setCatalogue(event.products as Product[]);
+              break;
+            case "assembled":
+              setAssembled({
+                total: event.total as number,
+                perturbations: event.perturbations as number,
+                live: event.live as number,
+                generated: event.generated as number,
+              });
+              setPhase(null);
+              break;
+            case "scenario_start":
+              setCurrent(`${(event.index as number) + 1}/${event.total} ${event.id}`);
+              break;
+            case "journey":
+              setJourneys((prev) => [...prev, event as unknown as Journey]);
+              break;
+            case "done":
+              setSummary(event.summary as Summary);
+              setCurrent(null);
+              break;
+            case "rejected":
+              setRejected({
+                problems: event.problems as string[],
+                message: event.message as string,
+              });
+              break;
+            case "error":
+              setError(event.message as string);
+              break;
+          }
+        }
+      }
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") {
+        setError(e instanceof Error ? e.message : String(e));
+      }
     } finally {
       setRunning(false);
+      setPhase(null);
+      setCurrent(null);
+      abort.current = null;
     }
   }
 
   return (
     <>
       <div className="panel">
-        <h2>Run the same rules against Nordwell</h2>
+        <h2>Map this merchant with a model, then test it</h2>
         <p className="lead">
-          Nordwell Provisions is a separate GraphQL service with its own data model,
-          reached over HTTP exactly as a third party&rsquo;s catalogue would be. Nothing
-          about the twelve invariants changes — only a mapping describing where its
-          fields live.
+          One response is read from Nordwell&rsquo;s GraphQL API. A model is asked where
+          each field lives. Validation accepts the mapping only by building real products
+          with it. Then live agents shop the merchant through that mapping and the same
+          twelve invariants deliver a verdict. <strong>No product id and no tool order
+          appears anywhere in this flow</strong> — the agent finds the shop and decides for
+          itself.
         </p>
-        <button className="primary" onClick={run} disabled={running}>
-          {running ? "Running…" : "Run against Nordwell"}
+        <button className="primary" onClick={() => run("standard")} disabled={running}>
+          {running ? "Running…" : "Map and test — 20 journeys"}
+        </button>{" "}
+        <button onClick={() => run("quick")} disabled={running}>
+          Quick — 8 journeys
         </button>
-      </div>
-
-      {result && !result.ok && (
-        <div className="panel">
-          <h2>Could not reach Nordwell</h2>
-          <p className="lead">
-            The adapter reaching a merchant is the thing that can break, so the failure
-            is shown rather than hidden.
-          </p>
-          <pre className="mono">{result.error}</pre>
-          {result.endpoint && <p className="meta mono">{result.endpoint}</p>}
-        </div>
-      )}
-
-      {result?.ok && (
-        <>
-          <div className="panel">
-            <h2>What Nordwell can answer</h2>
-            <p className="lead">
-              Derived from the mapping, not declared beside it: a merchant cannot claim a
-              capability without saying which field supplies it.{" "}
-              <strong>
-                {result.capabilityCount} of {result.capabilityTotal}
-              </strong>{" "}
-              available.
-            </p>
-            <table>
-              <thead>
-                <tr>
-                  <th>Capability</th>
-                  <th>Available</th>
-                  <th>What it means</th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.capabilities?.map((row) => (
-                  <tr key={row.capability}>
-                    <td className="mono">{row.capability}</td>
-                    <td>
-                      {row.available
-                        ? row.derived
-                          ? "yes — tracked by the engine"
-                          : "yes"
-                        : "no"}
-                    </td>
-                    <td>{row.description}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="meta">
-              &ldquo;Tracked by the engine&rdquo; means Nordwell has no such field and
-              the engine keeps the version itself by remembering what it last read. It
-              only sees changes between its own reads, so it is not the same guarantee as
-              a merchant-supplied version.
-            </p>
-          </div>
-
-          <div className="panel">
-            <h2>Nordwell&rsquo;s catalogue, translated</h2>
-            <p className="lead">
-              Prices arrive as decimal strings under <code>pricing.unit.amount</code>,
-              stock as <code>availability.quantity</code>, vegan status as a tag list.
-              This is what the invariants see after mapping.
-            </p>
-            <table>
-              <thead>
-                <tr>
-                  <th>Id</th>
-                  <th>Name</th>
-                  <th>Price</th>
-                  <th>Stock</th>
-                  <th>Vegan</th>
-                  <th>Allergens</th>
-                  <th>Category</th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.catalogue?.map((product) => (
-                  <tr key={product.id}>
-                    <td className="mono">{product.id}</td>
-                    <td>{product.name}</td>
-                    <td>{product.price}</td>
-                    <td>{product.stock}</td>
-                    <td>{product.vegan === null ? "unknown" : String(product.vegan)}</td>
-                    <td>
-                      {product.allergens === null
-                        ? "unknown"
-                        : product.allergens.length === 0
-                          ? "none declared"
-                          : product.allergens.join(", ")}
-                    </td>
-                    <td>{product.category}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="panel">
-            <h2>A clean journey</h2>
-            <ul className="trace">
-              {result.clean?.steps.map((step, index) => (
-                <li key={index} data-tone={step.tone}>
-                  <span className="mono">{step.label}</span> — {step.detail}
-                </li>
-              ))}
-            </ul>
-            <div className="meta">
-              <div>
-                <span>Total</span>₹{result.clean?.total}
-              </div>
-              <div>
-                <span>Violations</span>
-                {result.clean?.violations}
-              </div>
-              <div>
-                <span>Rules withheld</span>
-                {result.clean?.withheld.length
-                  ? result.clean.withheld.join(", ")
-                  : "none"}
-              </div>
-            </div>
-            <p className="meta">
-              {result.clean?.withheld.includes("INV-INVENTORY")
-                ? "INV-INVENTORY was withheld by name because Nordwell cannot hold stock — it has no reservation concept. A withheld rule is reported as not run, never counted as a pass it did not earn."
-                : "No rule was withheld."}
-            </p>
-          </div>
-
-          <div className="panel">
-            <h2>The same journey, with Nordwell re-pricing mid-flight</h2>
-            <p className="lead">
-              Quoted at ₹{result.reprice?.quotedAt}, approved, and then Nordwell raises
-              the price to ₹{result.reprice?.newPrice} before checkout. Nordwell has no
-              price version field at all, so the only way to notice is that the engine
-              remembers what it last read.
-            </p>
-            <div className="meta">
-              <div>
-                <span>Checkout</span>
-                {result.reprice?.blocked ? "blocked" : "ALLOWED — this is a bug"}
-              </div>
-              <div>
-                <span>Fired</span>
-                {result.reprice?.fired.length
-                  ? result.reprice.fired.join(", ")
-                  : "nothing"}
-              </div>
-            </div>
-            {result.reprice?.reason && (
-              <pre className="mono">{result.reprice.reason}</pre>
-            )}
-          </div>
-        </>
-      )}
-
-      <div className="panel">
-        <h2>Let a model write the mapping</h2>
-        <p className="lead">
-          The mapping above was written by hand — someone read Nordwell&rsquo;s response
-          and worked out which field was the price. A model does that in seconds. It is
-          also capable of being confidently wrong about it, and that field is the amount a
-          buyer is charged. So the model <strong>proposes</strong>, and deterministic code
-          decides: a proposal is accepted only by being used to build a real product from
-          real rows, through the same strict readers the hand-written path uses.
-        </p>
-        <button className="primary" onClick={infer} disabled={inferring}>
-          {inferring ? "Asking the model…" : "Infer the mapping with a model"}
-        </button>
-        {inferring && (
+        {running && (
           <p className="meta">
-            One model call, then two full journeys — the inferred mapping and the
-            hand-written one, so the verdicts can be compared.
+            {phase ?? current ?? "Working…"} — each journey is a real multi-turn
+            conversation, so this takes minutes.
           </p>
+        )}
+        {roles && (
+          <div className="meta">
+            <div>
+              <span>Buyers</span>
+              <span className="mono">{roles.buyers.join(" · ") || "—"}</span>
+            </div>
+            <div>
+              <span>Adversary</span>
+              <span className="mono">{roles.adversary ?? "none"}</span>
+            </div>
+          </div>
         )}
       </div>
 
-      {inferred && !inferred.ok && inferred.reason === "no-model" && (
+      {error && (
         <div className="panel">
-          <h2>No model configured</h2>
-          <p className="lead">
-            Refusing rather than substituting a scripted stub — inferring a mapping from a
-            canned reply would demonstrate nothing while looking like it had.
-          </p>
-          <pre className="mono">{inferred.error}</pre>
+          <h2>The run stopped</h2>
+          <pre className="mono">{error}</pre>
         </div>
       )}
 
-      {inferred && !inferred.ok && inferred.reason === "rejected" && (
+      {rejected && (
         <div className="panel">
-          <h2>Proposal rejected — nothing was run against it</h2>
-          <p className="lead">
-            This is the mechanism working, and it is the more reassuring of the two
-            outcomes to watch. The model asserted something the response does not support,
-            and validation refused it. The alternative is a mapping that reads the wrong
-            field and reports confident verdicts about the wrong amount of money.
-          </p>
+          <h2>The model&rsquo;s mapping was refused — nothing ran through it</h2>
+          <p className="lead">{rejected.message}</p>
           <ul className="trace">
-            {inferred.problems?.map((problem, index) => (
+            {rejected.problems.map((problem, index) => (
               <li key={index} data-tone="blocked">
                 {problem}
               </li>
@@ -334,98 +266,201 @@ export function MerchantConsole() {
         </div>
       )}
 
-      {inferred && !inferred.ok && inferred.reason === "error" && (
+      {mapping && (
         <div className="panel">
-          <h2>Could not complete the inference</h2>
-          <pre className="mono">{inferred.error}</pre>
+          <h2>What the model decided, and what it cost us</h2>
+          <table>
+            <tbody>
+              {Object.entries(mapping.paths).map(([field, path]) => (
+                <tr key={field}>
+                  <td>{field}</td>
+                  <td className="mono">{path ?? "not mapped"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="lead">
+            Inferred price: <strong>{mapping.priceForReview}</strong> — a human confirms
+            this. Nothing in the data distinguishes ₹649.00 from ₹6.49, so the unit is the
+            one judgement validation cannot make for you.
+          </p>
+          {mapping.notes && <p className="meta">Model&rsquo;s notes: {mapping.notes}</p>}
+          <h3>
+            Capabilities: {mapping.capabilityCount} of {mapping.capabilityTotal}
+          </h3>
+          <table>
+            <tbody>
+              {mapping.capabilities.map((row) => (
+                <tr key={row.capability}>
+                  <td className="mono">{row.capability}</td>
+                  <td>
+                    {row.available
+                      ? row.derived
+                        ? "yes — tracked by the engine"
+                        : "yes"
+                      : "no"}
+                  </td>
+                  <td className="note">{row.description}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
-      {inferred?.ok && (
-        <>
-          <div className="panel">
-            <h2>What the model proposed</h2>
-            <p className="lead">
-              Written by <span className="mono">{inferred.model}</span> from one response,
-              and accepted only after a real product was built with these paths.
-            </p>
-            <table>
-              <thead>
-                <tr>
-                  <th>Field</th>
-                  <th>Path the model chose</th>
+      {catalogue && (
+        <div className="panel">
+          <h2>The shop, as the agent will see it</h2>
+          <p className="lead">
+            Browsed through the model&rsquo;s mapping and translated into the entity model.
+            The agent picks from this — nobody hands it a basket.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>Id</th>
+                <th>Name</th>
+                <th>Price</th>
+                <th>Stock</th>
+                <th>Vegan</th>
+                <th>Allergens</th>
+              </tr>
+            </thead>
+            <tbody>
+              {catalogue.map((product) => (
+                <tr key={product.id}>
+                  <td className="mono">{product.id}</td>
+                  <td>{product.name}</td>
+                  <td>{product.price}</td>
+                  <td>{product.stock}</td>
+                  <td>{product.vegan === null ? "unknown" : String(product.vegan)}</td>
+                  <td>
+                    {product.allergens === null
+                      ? "unknown"
+                      : product.allergens.length === 0
+                        ? "none declared"
+                        : product.allergens.join(", ")}
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {Object.entries(inferred.mapping ?? {}).map(([field, path]) => (
-                  <tr key={field}>
-                    <td>{field}</td>
-                    <td className="mono">{path ?? "not mapped"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="meta">
-              <div>
-                <span>Capabilities</span>
-                {inferred.capabilities?.length} of 8
-              </div>
-              <div>
-                <span>Engine-tracked</span>
-                {inferred.derivedCapabilities?.join(", ") || "none"}
-              </div>
-            </div>
-            {/*
-              The one thing validation cannot settle, so it is put in front of a person
-              rather than assumed. Nothing in "649.00" says whether the merchant means
-              ₹649.00 or ₹6.49, and both readings are self-consistent.
-            */}
-            <p className="lead" style={{ marginBottom: 0 }}>
-              Inferred price: <strong>{inferred.priceForReview}</strong> — a human
-              confirms this. Nothing in the data distinguishes ₹649.00 from ₹6.49, so the
-              unit is the one judgement left to you.
-            </p>
-            {inferred.notes && (
-              <p className="meta">Model&rsquo;s notes: {inferred.notes}</p>
-            )}
-          </div>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
-          <div className="panel">
-            <h2>Same journey, both mappings</h2>
-            <table>
-              <thead>
-                <tr>
-                  <th>Mapping</th>
-                  <th>Total</th>
-                  <th>Checkout</th>
-                  <th>Fired</th>
-                  <th>Withheld</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(
-                  [
-                    ["hand-written", inferred.handWritten],
-                    ["model-written", inferred.modelWritten],
-                  ] as const
-                ).map(([label, verdict]) => (
-                  <tr key={label}>
-                    <td>{label}</td>
-                    <td>₹{verdict?.total}</td>
-                    <td>{verdict?.blocked ? "blocked" : "allowed"}</td>
-                    <td className="mono">{verdict?.fired.join(", ") || "—"}</td>
-                    <td className="mono">{verdict?.withheld.join(", ") || "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="lead" style={{ marginBottom: 0 }}>
-              {inferred.agree
-                ? "Identical verdicts. A mapping a model wrote from one response reached the same conclusions as the one written by hand — including catching the price move against a merchant that publishes no version field."
-                : "The two mappings disagree. Shown rather than reconciled: a difference here means the model read a different field, and which one is right is not something this page should decide."}
+      {(assembled || journeys.length > 0) && (
+        <div className="panel">
+          <h2>
+            Journeys{assembled ? ` (${journeys.length}/${assembled.total})` : ""}
+          </h2>
+          {assembled && (
+            <p className="meta">
+              {assembled.perturbations} transport perturbation · {assembled.live} live goal
+              · {assembled.generated} written by the adversary
             </p>
+          )}
+          <table>
+            <thead>
+              <tr>
+                <th>Scenario</th>
+                <th>Driven by</th>
+                <th>Outcome</th>
+                <th>Invariants fired</th>
+                <th>At risk</th>
+              </tr>
+            </thead>
+            <tbody>
+              {journeys.map((journey) => (
+                <tr key={`${journey.id}-${journey.index}`} data-tone={TONE[journey.disposition]}>
+                  <td>
+                    <div className="mono">{journey.id}</div>
+                    <div className="note">{journey.title}</div>
+                    {journey.toolPath.length > 0 && (
+                      <div className="note mono" style={{ fontSize: "0.7rem" }}>
+                        {journey.toolPath.join(" → ")}
+                      </div>
+                    )}
+                  </td>
+                  <td className="mono note">{journey.model ?? "—"}</td>
+                  <td>
+                    {journey.disposition}
+                    <div className="note">{journey.note}</div>
+                  </td>
+                  <td className="mono note">{journey.fired.join(", ") || "—"}</td>
+                  <td>{journey.moneyAtRisk}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {current && <p className="meta">Running {current}…</p>}
+        </div>
+      )}
+
+      {summary && (
+        <div className="panel">
+          <h2>Verdict on a merchant nobody hardcoded</h2>
+          <div className="meta">
+            <div>
+              <span>Readiness</span>
+              <strong>{summary.readiness}</strong>
+            </div>
+            <div>
+              <span>Journeys</span>
+              {summary.journeys}
+            </div>
+            <div>
+              <span>Passed</span>
+              {summary.passed}
+            </div>
+            <div>
+              <span>Safely rejected</span>
+              {summary.safelyRejected}
+            </div>
+            <div>
+              <span>Escalated</span>
+              {summary.escalated}
+            </div>
+            <div>
+              <span>Unsafe violations</span>
+              {summary.unsafeViolations}
+            </div>
+            <div>
+              <span>Inconclusive</span>
+              {summary.inconclusive}
+            </div>
+            <div>
+              <span>Money at risk</span>
+              {summary.moneyAtRisk}
+            </div>
+            <div>
+              <span>Audit chain</span>
+              {summary.auditChainOk ? "intact" : "BROKEN"}
+            </div>
+            <div>
+              <span>Duration</span>
+              {Math.round(summary.durationMs / 1000)}s
+            </div>
           </div>
-        </>
+          {/*
+            The denominator, stated. "No unsafe violations" across eleven rules is a
+            different claim from the same result across twelve, and only this line tells
+            them apart.
+          */}
+          <p className="lead" style={{ marginBottom: 0 }}>
+            {summary.withheld.length > 0
+              ? `Judged on ${12 - summary.withheld.length} of 12 invariants. ` +
+                `${summary.withheld.join(", ")} could not run against this merchant and ` +
+                `is reported as not run, never counted as a pass it did not earn.`
+              : "All twelve invariants ran against this merchant."}
+          </p>
+          {summary.inconclusive > 0 && (
+            <p className="meta">
+              {summary.inconclusive} journey(s) ended inconclusive — the agent ran out of
+              tool budget or declined to proceed, so nothing was verified. Excluded from
+              coverage rather than counted as safe.
+            </p>
+          )}
+        </div>
       )}
     </>
   );

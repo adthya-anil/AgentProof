@@ -100,6 +100,16 @@ export interface JourneyResult {
   auditEvents: number;
   /** Invariants that actually evaluated here (not skipped). Coverage input. */
   exercisedInvariants: string[];
+  /**
+   * Rules that could not run against this merchant at all.
+   *
+   * Distinct from a rule that simply had nothing to say at a checkpoint. Carried on the
+   * result because it is the honest denominator: a journey reporting no violations across
+   * eleven rules is a different statement from one reporting none across twelve, and only
+   * this field tells them apart. It is empty for the in-process merchant, which supplies
+   * everything.
+   */
+  withheldInvariants: string[];
   /** Ordered tool names the agent called, for tool-path coverage. */
   toolPath: string[];
   /** Real elapsed ms from journey start to the first violation. */
@@ -517,6 +527,13 @@ export async function runScenario(
       perturbations: [...(perturber?.applied() ?? [])],
       auditEvents: events.length,
       exercisedInvariants: [...exercised].sort(),
+      withheldInvariants: [
+        ...new Set(
+          env.guard
+            .allEvaluations()
+            .flatMap((e) => e.capabilityGaps.map((gap) => gap.invariantId)),
+        ),
+      ].sort(),
       toolPath,
       msToFirstViolation,
       toolCallsToFirstViolation,
@@ -564,6 +581,7 @@ function errorResult(
     perturbations: [],
     auditEvents: 0,
     exercisedInvariants: [],
+    withheldInvariants: [],
     toolPath: [],
     msToFirstViolation: null,
     toolCallsToFirstViolation: null,

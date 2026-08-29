@@ -483,9 +483,34 @@ everything a mapping has to survive:
 | price version | monotonic counter | **none** |
 | reservations | yes | **none** |
 
-In the dashboard, **Merchants** runs it in a browser — the capability table, the
-translated catalogue, a clean journey, and the re-price being caught. Or from a
-terminal:
+In the dashboard, **Merchants → Map and test** runs the whole chain in a browser:
+one response read from the merchant, a model writes the mapping, validation accepts
+or refuses it, the catalogue is browsed *through that mapping*, and then real agents
+shop the shop and the twelve invariants deliver a verdict. Streamed, so journeys
+appear as they finish.
+
+**No product id and no tool order appears anywhere in that flow.** What stood here
+before ran two hardcoded journeys — fixed ids, fixed call sequence — and displayed
+the result as though a merchant had been tested. It had not been, and the inferred
+mapping was never used for anything except agreeing with the hand-written one on
+that same script. The two features that mattered never met.
+
+Measured, quick size, against a merchant the model had not seen:
+
+```
+  MAPPING  price=pricing.unit.amount (decimalString)  stock=availability.quantity
+           allergens=dietary.contains   caps=7/8   review=₹150.00
+  SHOP     6 products browsed through the model's mapping
+  SUITE    8 journeys (6 live goal, 2 written by the adversary)
+    passed           live-normal                withheld=INV-INVENTORY
+    safely_rejected  live-over-max-amount
+    inconclusive     live-price-changed
+    safely_rejected  gen-festive10-stack-over-cap
+  DONE     READY FOR CONTROLLED TEST · unsafe 0 · withheld INV-INVENTORY
+```
+
+`INV-INVENTORY` is reported as **not run**, never as a pass it did not earn — the
+verdict is over eleven invariants and says so. Or from a terminal:
 
 ```
 npm run build && npm start
