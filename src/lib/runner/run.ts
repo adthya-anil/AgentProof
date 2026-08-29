@@ -402,6 +402,15 @@ export async function runScenario(
      */
     const interferenceMissed =
       scenario.interference !== undefined && interferer?.applied() !== true;
+
+    /** Rules this merchant could not supply the inputs for. Empty for HamperHub. */
+    const withheldInvariants = [
+      ...new Set(
+        env.guard
+          .allEvaluations()
+          .flatMap((e) => e.capabilityGaps.map((gap) => gap.invariantId)),
+      ),
+    ].sort();
     /**
      * A journey whose fault never fired proved nothing, whoever stopped it.
      *
@@ -417,8 +426,30 @@ export async function runScenario(
      * came to test never happened" are not alternatives: the second is true regardless of
      * the first, and it is the more important fact.
      */
+    /**
+     * A scenario cannot speak to an invariant this merchant withheld.
+     *
+     * `live-inventory-changed` passed three runs out of three against a mapped merchant
+     * with nothing fired and no money at risk, and it was right to: INV-INVENTORY needs
+     * `reservation.lookup`, Nordwell has none, so the rule was withheld before it ever
+     * ran. The stock-out did reach the merchant — but the buyer's unit was already
+     * reserved, so nothing about their purchase became unsafe, and neither the Guard nor
+     * the merchant had anything to object to.
+     *
+     * Reporting that as `passed` is the problem. It reads as "the integration handled a
+     * stock-out correctly" when the truth is "this cannot be tested here". Coverage built
+     * from journeys like that is coverage of nothing, and it is exactly what let a suite
+     * with no invariants fired report READY.
+     */
+    const targetWithheld =
+      scenario.targetsInvariant !== null &&
+      withheldInvariants.includes(scenario.targetsInvariant);
+
     const provedNothing =
-      outcome.inconclusive || perturbationMissed || interferenceMissed;
+      outcome.inconclusive ||
+      perturbationMissed ||
+      interferenceMissed ||
+      targetWithheld;
 
     const disposition: JourneyDisposition = provedNothing
       ? "inconclusive"
@@ -531,7 +562,25 @@ export async function runScenario(
             (interferer?.failureReason()
               ? ` (${interferer.failureReason()})`
               : "")
-          : outcome.note,
+          : /**
+             * A journey whose target rule was withheld says so, rather than reading as a
+             * clean completion. The fault may well have landed; there was simply no rule
+             * left to judge it.
+             */
+            targetWithheld
+            ? `${outcome.note} — but ${scenario.targetsInvariant} cannot run against ` +
+              `this merchant, so nothing here could test it`
+            : /**
+               * A fault that fired is stated even on a passing journey.
+               *
+               * Otherwise a journey that had a price raised under it and completed anyway
+               * reads exactly like one where nothing was injected — both `passed`, both
+               * with no invariant fired. One of those is fine and the other is an escape,
+               * and the trace could not tell them apart.
+               */
+              interferer?.applied() && interferer.appliedEffect()
+              ? `${outcome.note} — fault applied: ${interferer.appliedEffect()}`
+              : outcome.note,
       violations,
       escalations,
       integrationDefects: defects,
@@ -548,13 +597,7 @@ export async function runScenario(
       perturbations: [...(perturber?.applied() ?? [])],
       auditEvents: events.length,
       exercisedInvariants: [...exercised].sort(),
-      withheldInvariants: [
-        ...new Set(
-          env.guard
-            .allEvaluations()
-            .flatMap((e) => e.capabilityGaps.map((gap) => gap.invariantId)),
-        ),
-      ].sort(),
+      withheldInvariants,
       toolPath,
       msToFirstViolation,
       toolCallsToFirstViolation,
