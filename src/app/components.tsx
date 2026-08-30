@@ -9,69 +9,175 @@ import type { IntegrationVariant } from "@/lib/dashboard/data";
 
 /** Shared server components. Nothing here is interactive, so nothing ships JS. */
 
+type NavKey =
+  | "live"
+  | "preflight"
+  | "hamperhub"
+  | "merchants"
+  | "run"
+  | "violations"
+  | "evaluation"
+  | "policy"
+  | "audit";
+
+function NavIcon({ name }: { name: NavKey }) {
+  const paths: Record<NavKey, React.ReactNode> = {
+    live: <path d="M3 12h3l2.2-5 3.5 10 2.5-6H21" />,
+    hamperhub: (
+      <>
+        <path d="M4 10v10h16V10M3 10l2-6h14l2 6" />
+        <path d="M8 20v-6h8v6" />
+      </>
+    ),
+    preflight: (
+      <>
+        <path d="m12 3-7.5 3v5.2c0 4.7 3.1 8.1 7.5 9.8 4.4-1.7 7.5-5.1 7.5-9.8V6L12 3Z" />
+        <path d="m8.7 12 2.1 2.1 4.6-4.7" />
+      </>
+    ),
+    merchants: (
+      <>
+        <circle cx="6" cy="7" r="2.5" />
+        <circle cx="18" cy="7" r="2.5" />
+        <circle cx="12" cy="17" r="2.5" />
+        <path d="m8.2 8.2 2.6 6.4m5-6.4-2.6 6.4M8.5 7h7" />
+      </>
+    ),
+    run: (
+      <>
+        <rect x="3.5" y="4" width="17" height="16" rx="2" />
+        <path d="M8 15v2m4-6v6m4-9v9" />
+      </>
+    ),
+    violations: (
+      <>
+        <path d="M12 3 2.8 20h18.4L12 3Z" />
+        <path d="M12 9v5m0 3h.01" />
+      </>
+    ),
+    evaluation: (
+      <>
+        <path d="M4 19V9m6 10V5m6 14v-7m4 7H2" />
+        <path d="m4 7 6-4 6 6 4-3" />
+      </>
+    ),
+    audit: (
+      <>
+        <path d="M9 6h11M9 12h11M9 18h11" />
+        <path d="m3.5 6 .8.8L6 5m-2.5 7 .8.8L6 11m-2.5 7 .8.8L6 17" />
+      </>
+    ),
+    policy: (
+      <>
+        <path d="M6 3h9l4 4v14H6V3Z" />
+        <path d="M15 3v5h4M9 12h6m-6 4h6" />
+      </>
+    ),
+  };
+
+  return (
+    <svg
+      className="nav-icon"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {paths[name]}
+    </svg>
+  );
+}
+
 export function Tabs({
   active,
   variant,
 }: {
-  active:
-    | "live"
-    | "preflight"
-    | "hamperhub"
-    | "merchants"
-    | "run"
-    | "violations"
-    | "evaluation"
-    | "policy"
-    | "audit";
+  active: NavKey;
   variant: IntegrationVariant;
 }) {
   const q = `?integration=${variant}`;
 
-  /**
-   * Grouped, because nine flat destinations described nothing.
-   *
-   * The order was already deliberate — watch it happen, then run something, then read the
-   * result — but as a wrapping strip of tabs that reasoning was invisible. Named regions make
-   * the product explain its own shape before anyone clicks: you cannot judge a report about an
-   * integration you have not seen, so seeing comes first.
-   */
   const groups: Array<{
     label: string;
-    items: Array<{ key: typeof active; href: string; label: string }>;
+    items: Array<{
+      key: NavKey;
+      href: string;
+      label: string;
+      icon: NavKey;
+    }>;
   }> = [
     {
       label: "Watch",
       items: [
-        { key: "live", href: "/live", label: "Live agent" },
-        { key: "hamperhub", href: "/hamperhub", label: "HamperHub store" },
+        { key: "live", href: "/live", label: "Live agent", icon: "live" },
+        {
+          key: "hamperhub",
+          href: "/hamperhub",
+          label: "HamperHub store",
+          icon: "hamperhub",
+        },
       ],
     },
     {
       label: "Test",
       items: [
-        { key: "preflight", href: "/preflight", label: "Run preflight" },
-        // Beside the merchant it contrasts with: the comparison *is* the point of the page,
-        // and placing it after the reports would read as an appendix.
-        { key: "merchants", href: `/merchants${q}`, label: "Any merchant" },
+        {
+          key: "preflight",
+          href: "/preflight",
+          label: "Run preflight",
+          icon: "preflight",
+        },
+        {
+          key: "merchants",
+          href: `/merchants${q}`,
+          label: "Any merchant",
+          icon: "merchants",
+        },
       ],
     },
     {
       label: "Results",
       items: [
-        { key: "run", href: `/${q}`, label: "Run summary" },
-        { key: "violations", href: `/violations${q}`, label: "Violations" },
-        { key: "evaluation", href: `/evaluation`, label: "Evaluation" },
-        { key: "audit", href: `/audit${q}`, label: "Audit trail" },
+        { key: "run", href: `/${q}`, label: "Run summary", icon: "run" },
+        {
+          key: "violations",
+          href: `/violations${q}`,
+          label: "Violations",
+          icon: "violations",
+        },
+        {
+          key: "evaluation",
+          href: "/evaluation",
+          label: "Evaluation",
+          icon: "evaluation",
+        },
+        {
+          key: "audit",
+          href: `/audit${q}`,
+          label: "Audit trail",
+          icon: "audit",
+        },
       ],
     },
     {
       label: "Reference",
-      items: [{ key: "policy", href: `/policy`, label: "Policy" }],
+      items: [{ key: "policy", href: "/policy", label: "Policy", icon: "policy" }],
     },
   ];
 
   return (
     <nav className="tabs" aria-label="Sections">
+      <div className="nav-context" aria-hidden="true">
+        <span className="nav-context-mark">AP</span>
+        <span>
+          <strong>Commerce safety</strong>
+          <small>Preflight workspace</small>
+        </span>
+      </div>
       {groups.map((group) => (
         <Fragment key={group.label}>
           <span className="group">{group.label}</span>
@@ -82,11 +188,16 @@ export function Tabs({
               data-active={String(tab.key === active)}
               aria-current={tab.key === active ? "page" : undefined}
             >
-              {tab.label}
+              <NavIcon name={tab.icon} />
+              <span>{tab.label}</span>
             </Link>
           ))}
         </Fragment>
       ))}
+      <div className="nav-footnote" aria-hidden="true">
+        <span />
+        Deterministic policy layer
+      </div>
     </nav>
   );
 }
@@ -103,12 +214,14 @@ export function VariantSwitcher({
       <Link
         href={`${basePath}?integration=vulnerable`}
         data-active={String(variant === "vulnerable")}
+        aria-current={variant === "vulnerable" ? "page" : undefined}
       >
         Vulnerable integration
       </Link>
       <Link
         href={`${basePath}?integration=fixed`}
         data-active={String(variant === "fixed")}
+        aria-current={variant === "fixed" ? "page" : undefined}
       >
         Fixed integration
       </Link>
@@ -216,7 +329,7 @@ export function ViolationCard({
         {scenarioId && (
           <Link
             href={`/journey/${encodeURIComponent(scenarioId)}?integration=${variant}`}
-            style={{ marginLeft: "auto", fontSize: "0.8rem" }}
+            className="replay-link"
           >
             replay {scenarioId} →
           </Link>
@@ -329,7 +442,7 @@ export function NoRunYet({
   return (
     <div className="panel">
       <h2>No {what} yet</h2>
-      <p className="note" style={{ marginTop: 0 }}>
+      <p className="note no-run-copy">
         Nothing has been executed for the <strong>{variant}</strong> integration.
         A preflight run drives a real model through every scenario, so it is
         started explicitly rather than on page load.

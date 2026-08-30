@@ -15,23 +15,29 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        {/*
-          Two levels of chrome, the way a payments dashboard is built: a dark bar that carries
-          identity across the full width, and a white rail beneath it that carries navigation.
-          The brand belongs in the bar rather than above the nav — it is about the product, not
-          about which page you are on, and putting it in the rail made the first navigation
-          group start a third of the way down the screen.
-        */}
+        <a className="skip-link" href="#main-content">
+          Skip to content
+        </a>
         <header className="topbar">
           <div className="masthead">
-            <h1>AgentProof</h1>
+            <span className="brand-mark" aria-hidden="true" />
+            <div className="brand-lockup">
+              <h1>AgentProof</h1>
+              <span>AI commerce assurance</span>
+            </div>
           </div>
           <p className="tagline">
             Test every path an AI buyer might take before money moves.
           </p>
+          <div className="topbar-mode" aria-label="Product scope">
+            <span aria-hidden="true" />
+            Preflight + runtime controls
+          </div>
         </header>
         <div className="rail" aria-hidden="true" />
-        <div className="shell">{children}</div>
+        <main className="shell" id="main-content">
+          {children}
+        </main>
       </body>
     </html>
   );
