@@ -12,7 +12,12 @@ services:
     name: nordwell-provisions
     runtime: node
     plan: free
-    buildCommand: npm ci
+    # `--include=dev` is required, not tidiness. The server is TypeScript and runs under
+    # `tsx`, which is a devDependency, and a host that builds with NODE_ENV=production makes
+    # plain `npm ci` skip devDependencies entirely. The build then succeeds, the deploy goes
+    # live, and the start command dies with `tsx: not found` — a failure that looks like a
+    # platform mystery rather than a missing flag. Measured: without this, tsx is absent.
+    buildCommand: npm ci --include=dev
     startCommand: npm run nordwell:serve
     healthCheckPath: /health
     envVars:
