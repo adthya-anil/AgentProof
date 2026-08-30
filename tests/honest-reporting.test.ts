@@ -715,3 +715,89 @@ describe("one order's money at risk, when several rules object to it", () => {
     expect(sumMoneyAtRiskByOrder([])).toBe(0);
   });
 });
+
+
+describe("a hazard the harness forced in is not one the agent avoided", () => {
+  /**
+   * The regression that reached a real report.
+   *
+   * `pert-02` duplicates `create_checkout` at the transport and targets INV-IDEMPOTENCY. The
+   * duplicate is injected, so the agent cannot decline it — and when the integration absorbs
+   * it correctly the rule never fires. `target_not_exercised` read that non-firing as "the
+   * agent avoided the hazard it targets, so this journey tested nothing of it", printed
+   * directly above a tool path reading `create_checkout → create_checkout`. The report
+   * contradicted itself and filed the single most valuable outcome in the product — a
+   * duplicate charge correctly absorbed — as having verified nothing.
+   *
+   * `pert-03` and `pert-04` escaped only because they declare `targetsInvariant: null`, which
+   * is luck rather than logic.
+   */
+  /**
+   * Built on `reg-01-normal`, whose happy path is already proven, with pert-02's shape laid
+   * over it: agent-driven, targeting INV-IDEMPOTENCY, with the checkout duplicated by the
+   * transport. Hand-rolling the checkout flow here got it subtly wrong and tested a
+   * confirmation failure instead of a duplicate.
+   */
+  function duplicateDeliveryAbsorbed(id: string): Scenario {
+    const happyPath = REGRESSION_SCENARIOS.find((s) => s.id === "reg-01-normal");
+    if (!happyPath) throw new Error("reg-01-normal is missing");
+
+    return {
+      ...happyPath,
+      id,
+      title: "checkout delivered twice, absorbed correctly",
+      driver: "agent",
+      targetsInvariant: "INV-IDEMPOTENCY",
+      perturbation: { duplicate: { tool: "create_checkout" } },
+    };
+  }
+
+  it("reports an absorbed duplicate as a pass, not as having tested nothing", async () => {
+    const suite = await runSuite([duplicateDeliveryAbsorbed("inj-1")], {
+      mutations: MutationSet.fixed(),
+    });
+    const journey = suite.journeys[0];
+
+    // The transport really did duplicate it — the hazard entered the transaction.
+    expect(journey?.perturbations.length).toBeGreaterThan(0);
+    // And exactly one payable order survived, which is the rule doing its job.
+    expect(journey?.duplicatePayableOrders).toBe(0);
+
+    expect(journey?.disposition).toBe("passed");
+    expect(journey?.inconclusiveReason).toBeNull();
+  });
+
+  it("does not describe an injected hazard as one the agent avoided", async () => {
+    const suite = await runSuite([duplicateDeliveryAbsorbed("inj-2")], {
+      mutations: MutationSet.fixed(),
+    });
+    const note = describeInconclusive(inconclusiveBreakdown(suite.journeys));
+
+    // Nothing was inconclusive, so there is no explanation to give.
+    expect(note).toBeNull();
+  });
+
+  /**
+   * The original fix must survive: a hazard the agent genuinely chose to avoid, with nothing
+   * injected, is still not evidence.
+   */
+  it("still reclassifies a journey where the agent dodged its own hazard", async () => {
+    const happyPath = REGRESSION_SCENARIOS.find((s) => s.id === "reg-01-normal");
+    if (!happyPath) throw new Error("reg-01-normal is missing");
+    // Completes cleanly, nothing injected, and claims to target a rule its cart never
+    // provokes — the shape of a live twin whose agent declined its own hazard.
+    const dodged: Scenario = {
+      ...happyPath,
+      id: "dodge-1",
+      title: "completes without ever provoking its target rule",
+      driver: "agent",
+      targetsInvariant: "INV-BUDGET",
+    };
+
+    const suite = await runSuite([dodged], { mutations: MutationSet.fixed() });
+
+    expect(suite.journeys[0]?.perturbations.length).toBe(0);
+    expect(suite.journeys[0]?.disposition).toBe("inconclusive");
+    expect(suite.journeys[0]?.inconclusiveReason).toBe("target_not_exercised");
+  });
+});

@@ -562,10 +562,32 @@ export async function runScenario(
     const firedHere = new Set(
       [...violations, ...escalations].map((v) => v.invariantId),
     );
+    /**
+     * A hazard the harness injected is not one the agent could have declined.
+     *
+     * `target_not_exercised` exists for an agent that dodged its own hazard — stayed under
+     * budget, never added the unknown-allergen truffle. A transport perturbation is the
+     * opposite: `pert-02` duplicates `create_checkout` whether the agent likes it or not, so
+     * the duplicate demonstrably entered the transaction. When the target rule then does not
+     * fire, the integration absorbed it — which is the most valuable result this product can
+     * report, not an absence of one.
+     *
+     * Without this, `pert-02` was reclassified out of `passed` into "the agent avoided the
+     * hazard it targets" while its own tool path showed `create_checkout → create_checkout`.
+     * The report contradicted itself, and correct defensive behaviour was recorded as having
+     * verified nothing. `pert-03` and `pert-04` escaped only because they declare no target.
+     *
+     * A fault that did *not* land is already handled: `perturbationMissed` and
+     * `interferenceMissed` catch it and name the reason.
+     */
+    const hazardWasInjected =
+      (perturber?.applied().length ?? 0) > 0 || interferer?.applied() === true;
+
     const targetNotExercised =
       scenario.driver === "agent" &&
       scenario.targetsInvariant !== null &&
       !targetWithheld &&
+      !hazardWasInjected &&
       !firedHere.has(scenario.targetsInvariant) &&
       // Only reclassify what would otherwise read as a clean outcome. A journey the
       // agent abandoned is already `inconclusive` via `outcome.inconclusive`; a defect
