@@ -27,72 +27,71 @@
 
 :root {
   /*
-   * Light, cool-neutral. A verdict about money is read for longer than it takes to skim, and
-   * long reading is what light surfaces are better at.
+   * Palette taken from a payments dashboard rather than a generic grey ramp.
+   *
+   * Two decisions carry most of the character. Every neutral has a blue undertone — a page of
+   * pure greys beside a navy bar reads as two unrelated products — and the canvas is a tinted
+   * blue-grey rather than white, so a white card is a distinct surface instead of an outlined
+   * region of the background.
    */
-  --bg: #f7f8fa;
+  --chrome: #16224a;
+  --chrome-2: #1e2c5c;
+  --chrome-text: #ffffff;
+  --chrome-muted: #a9b4d4;
+
+  --bg: #f5f7fa;
   --surface: #ffffff;
-  --surface-2: #f4f5f7;
-  --surface-3: #eceef2;
+  --surface-2: #f4f6f9;
+  --surface-3: #eaeef4;
 
-  --border: #e4e6ea;
-  --border-strong: #d2d6dd;
+  --border: #e3e8ef;
+  --border-strong: #cdd5e0;
 
   /*
-   * Three levels of text, not two. Body copy at full contrast, supporting prose one step
-   * down, and labels one step further — so `.note` can be quiet without being faint.
+   * Darker than a token generator would suggest, on purpose. A contrast ratio is a floor for
+   * legibility, not a target for comfort, and text a reader calls "almost invisible" is wrong
+   * whatever it measures.
    */
+  --text: #101736;
+  --text-2: #39415e;
   /*
-   * Darker than a token generator would suggest, on purpose.
-   *
-   * The first pass used a conventional grey ramp that cleared WCAG comfortably and still read
-   * as washed out on a real screen — the ratio is a floor for legibility, not a target for
-   * comfort. Values a reader described as "almost invisible" are wrong whatever they measure,
-   * so secondary text moved close to the primary and labels are now a mid-grey rather than a
-   * light one.
+   * Chosen against the tint, not against white. An earlier grey cleared 4.5:1 on a white card
+   * and then failed on `--surface-2` — which is exactly where the smallest type in the product
+   * sits, the uppercase table headers.
    */
-  --text: #101317;
-  --text-2: #383e46;
-  /*
-   * Chosen against the tint, not against white.
-   *
-   * An earlier grey cleared 4.5:1 on a white card and then failed at 4.38:1 on `--surface-2` —
-   * which is exactly where the smallest type in the product sits, the uppercase table headers.
-   * A label that passes on the background it is not used on is not passing.
-   */
-  --muted: #5b616a;
+  --muted: #59627e;
 
-  --accent: #0a66e0;
-  --accent-hover: #0954b8;
-  --accent-soft: #eaf2fe;
-  --accent-ring: rgba(10, 102, 224, 0.28);
+  --accent: #1a63d8;
+  --accent-hover: #1552b8;
+  --accent-soft: #ebf2fe;
+  --accent-ring: rgba(26, 99, 216, 0.26);
 
-  /* Semantic pairs: a readable foreground, a tint to sit on, a border between them. */
-  --ok: #067647;
-  --ok-bg: #ecfdf3;
-  --ok-border: #a9f0c8;
+  --ok: #0a6c46;
+  --ok-bg: #e9f8f0;
+  --ok-border: #a8e5c6;
 
-  --warn: #b54708;
-  --warn-bg: #fffaeb;
-  --warn-border: #fedf89;
+  --warn: #9a5b06;
+  --warn-bg: #fdf6e7;
+  --warn-border: #f5d99b;
 
-  --bad: #b42318;
-  --bad-bg: #fef3f2;
-  --bad-border: #fecdca;
+  --bad: #b02a1e;
+  --bad-bg: #fdf1f0;
+  --bad-border: #f6c9c4;
 
-  --info: #5925dc;
-  --info-bg: #f4f3ff;
-  --info-border: #d9d6fe;
+  --info: #4c2ad0;
+  --info-bg: #f2f0fe;
+  --info-border: #d3ccfa;
 
-  --radius: 14px;
-  --radius-sm: 9px;
-  --radius-xs: 6px;
+  /* Small radii and hairline borders: a dashboard card, not a marketing panel. */
+  --radius: 8px;
+  --radius-sm: 6px;
+  --radius-xs: 4px;
 
-  /* Two very soft layers. Cards should feel lifted, not dropped from a height. */
-  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
-  --shadow-md: 0 2px 4px rgba(16, 24, 40, 0.04), 0 8px 20px rgba(16, 24, 40, 0.07);
+  --shadow-sm: 0 1px 2px rgba(16, 23, 54, 0.05);
+  --shadow-md: 0 4px 12px rgba(16, 23, 54, 0.08);
 
-  --rail: 258px;
+  --rail: 236px;
+  --topbar: 56px;
 
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter,
     Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -154,67 +153,79 @@ code {
 }
 
 /* ---------------------------------------------------------------------------
-   The rail: brand and navigation
-   ---------------------------------------------------------------------------
-   A left rail rather than a top tab strip. Nine destinations wrapped across the top said
-   nothing about how they relate; stacked and grouped, the product explains its own shape —
-   watch it happen, run a test, read the result, check the rules. */
-.rail {
-  position: fixed;
-  inset: 0 auto 0 0;
-  width: var(--rail);
-  background: var(--surface);
-  border-right: 1px solid var(--border);
-  z-index: 1;
-}
-
-.brand {
+   Chrome: top bar, rail, content column
+   --------------------------------------------------------------------------- */
+.topbar {
   position: fixed;
   top: 0;
   left: 0;
-  width: var(--rail);
-  padding: 1.5rem 1.25rem 1rem;
-  z-index: 3;
+  right: 0;
+  height: var(--topbar);
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0 1.25rem;
+  background: var(--chrome);
+  color: var(--chrome-text);
+  /* A hairline a shade lighter than the bar, so the edge reads as deliberate rather than as the
+     canvas starting. A shadow here would float the bar above content it is not above. */
+  border-bottom: 1px solid var(--chrome-2);
+  z-index: 10;
 }
 
 .masthead {
   display: flex;
   align-items: baseline;
   gap: 0.5rem;
-  margin-bottom: 0.4rem;
+  /* Matches the rail, so the wordmark sits directly above the navigation it labels. */
+  width: calc(var(--rail) - 1.25rem);
+  flex: 0 0 auto;
 }
 
 .masthead h1 {
-  font-size: 1.25rem;
+  font-size: 1.125rem;
   font-weight: 640;
-  letter-spacing: -0.021em;
+  letter-spacing: -0.02em;
   margin: 0;
-  color: var(--text);
-}
-
-/* The product's claim. Quiet, but not so quiet it stops being read. */
-.masthead .note {
-  display: none;
+  color: var(--chrome-text);
 }
 
 .tagline {
-  color: var(--muted);
+  color: var(--chrome-muted);
   font-size: 0.875rem;
-  line-height: 1.5;
+  line-height: 1.4;
   margin: 0;
 }
 
-/* ---- navigation ---- */
+/* ---- the rail's surface, drawn separately from the nav that sits on it ---- */
+.rail {
+  position: fixed;
+  top: var(--topbar);
+  bottom: 0;
+  left: 0;
+  width: var(--rail);
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  z-index: 1;
+}
+
+/*
+ * Navigation, grouped into named regions.
+ *
+ * Nine flat destinations described nothing. The order was always deliberate — watch it happen,
+ * run something, read the result, check the rules — but as a wrapping strip of tabs that
+ * reasoning was invisible.
+ */
 .tabs {
   position: fixed;
-  top: 6.25rem;
+  top: var(--topbar);
   bottom: 0;
   left: 0;
   width: var(--rail);
   display: flex;
   flex-direction: column;
   gap: 1px;
-  padding: 0.5rem 0.75rem 2rem;
+  padding: 0.75rem 0.625rem 2rem;
   overflow-y: auto;
   overscroll-behavior: contain;
   z-index: 2;
@@ -224,11 +235,11 @@ code {
   display: flex;
   align-items: center;
   gap: 0.6rem;
-  padding: 0.55rem 0.75rem;
+  padding: 0.5rem 0.7rem;
   border-radius: var(--radius-sm);
   color: var(--text-2);
   font-size: 0.9375rem;
-  font-weight: 480;
+  font-weight: 460;
   line-height: 1.35;
   transition: background 0.12s ease, color 0.12s ease;
 }
@@ -237,82 +248,89 @@ code {
   background: var(--surface-2);
   color: var(--text);
 }
+/*
+ * The selected item is a filled row with a marker on the leading edge, which is what makes a
+ * long sidebar scannable at a glance rather than something you have to read.
+ */
 .tabs a[data-active="true"] {
   background: var(--accent-soft);
   color: var(--accent);
   font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 /*
- * Group labels. These *are* uppercase micro-type, which is what the style is for: they label
- * a region rather than introduce content, so they should sit below the reading line.
+ * Region labels. These *are* uppercase micro-type, which is what the style is for: they label
+ * a region rather than introduce content, so they sit below the reading line.
  */
 .tabs .group {
-  font-size: 0.75rem;
-  font-weight: 620;
-  letter-spacing: 0.06em;
+  font-size: 0.6875rem;
+  font-weight: 650;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--muted);
-  padding: 0.9rem 0.7rem 0.3rem;
+  padding: 1rem 0.7rem 0.35rem;
 }
 .tabs .group:first-child {
-  padding-top: 0.2rem;
+  padding-top: 0.25rem;
 }
 
-/* ---- content column ---- */
 /*
  * Hugs the rail and then fills the window.
  *
- * This was `max-width: 1120px; margin: 0 auto` with the rail's width added as left padding,
- * which is a contradiction: the box centres itself in the viewport while a third of it is
- * reserved for a sidebar that is already fixed to the left. The visible result was a ~440px
- * column of content floating in the middle of the screen with a quarter of the window empty on
- * the right — and tables, which are most of this product, squeezed hardest.
- *
- * `margin-left` reserves the rail; no auto-centring, so the content starts where the rail ends
- * and extends. The cap is generous rather than a reading measure because the widest thing here
- * is a twenty-row journey table, not a paragraph.
+ * This was `max-width` with `margin: 0 auto` *and* the rail's width as left padding, which is a
+ * contradiction: the box centres itself in the viewport while a third of it is reserved for a
+ * sidebar already fixed to the left. The result was a ~440px column of content floating mid-screen
+ * with a quarter of the window empty, and tables — most of this product — squeezed hardest.
  */
 .shell {
-  margin: 0 0 0 var(--rail);
+  margin: var(--topbar) 0 0 var(--rail);
   max-width: 1380px;
-  padding: 2.5rem 2.75rem 5rem;
+  padding: 1.75rem 1.75rem 5rem;
 }
 
 /*
  * Below roughly a tablet the rail stops being a rail. Everything unpins and the navigation
- * becomes a horizontally scrollable strip, because a 258px column on a phone leaves nothing
- * for the tables this product is mostly made of.
+ * becomes a horizontally scrollable strip, because a 236px column on a phone leaves nothing for
+ * the tables this product is mostly made of.
  */
 @media (max-width: 960px) {
   .rail {
     display: none;
   }
-  .brand,
+  .topbar {
+    position: static;
+    height: auto;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    padding: 0.85rem 1rem;
+  }
+  .masthead {
+    width: auto;
+  }
   .tabs {
     position: static;
     width: auto;
-  }
-  .brand {
-    padding: 1.25rem 1.25rem 0.75rem;
-  }
-  .tabs {
     flex-direction: row;
     gap: 0.25rem;
     overflow-x: auto;
-    padding: 0.25rem 1rem 0.75rem;
+    padding: 0.4rem 1rem 0.6rem;
     border-bottom: 1px solid var(--border);
     background: var(--surface);
   }
   .tabs a {
     white-space: nowrap;
   }
+  .tabs a[data-active="true"] {
+    box-shadow: inset 0 -2px 0 var(--accent);
+  }
   /* Region labels make no sense in a single scrolling row. */
   .tabs .group {
     display: none;
   }
   .shell {
-    padding: 1.5rem 1rem 4rem;
+    margin: 0;
+    padding: 1.25rem 1rem 4rem;
   }
 }
 
@@ -323,9 +341,9 @@ code {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
-  padding: 1.6rem 1.75rem;
-  margin-bottom: 1.25rem;
+  box-shadow: none;
+  padding: 1.25rem 1.375rem;
+  margin-bottom: 1rem;
 }
 
 /*
@@ -335,11 +353,11 @@ code {
  * paragraph — the single change that most made this look machine-generated.
  */
 .panel h2 {
-  font-size: 1.1875rem;
+  font-size: 1.0625rem;
   font-weight: 620;
   letter-spacing: -0.014em;
   color: var(--text);
-  margin: 0 0 0.9rem;
+  margin: 0 0 0.75rem;
 }
 
 .panel h3 {
@@ -379,13 +397,13 @@ code {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 1.05rem 1.15rem;
+  padding: 0.9rem 1rem;
 }
 .stat .n {
-  font-size: 1.875rem;
-  font-weight: 620;
+  font-size: 2rem;
+  font-weight: 480;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.025em;
   line-height: 1.15;
   color: var(--text);
 }
@@ -396,7 +414,7 @@ code {
   font-weight: 500;
   text-transform: none;
   letter-spacing: 0;
-  margin-top: 0.2rem;
+  margin-top: 0.3rem;
 }
 .stat.ok {
   background: var(--ok-bg);
@@ -512,10 +530,10 @@ th {
   text-align: left;
   color: var(--muted);
   font-weight: 600;
-  font-size: 0.75rem;
+  font-size: 0.7188rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  padding: 0.65rem 0.85rem;
+  padding: 0.6rem 0.8rem;
   background: var(--surface-2);
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
@@ -529,7 +547,7 @@ th:last-child {
   border-bottom-right-radius: var(--radius-xs);
 }
 td {
-  padding: 0.8rem 0.85rem;
+  padding: 0.7rem 0.8rem;
   border-bottom: 1px solid var(--border);
   vertical-align: top;
   color: var(--text-2);
@@ -911,7 +929,7 @@ a.primary {
   color: #ffffff;
   cursor: pointer;
   display: inline-block;
-  box-shadow: var(--shadow-sm);
+  box-shadow: none;
   transition: background 0.12s ease, border-color 0.12s ease;
 }
 button.primary:hover:not(:disabled),
@@ -1143,7 +1161,7 @@ ol.live pre {
   /* A URL is read character by character when it is wrong, which is when it matters. */
   font-family: var(--mono);
   font-size: 0.9rem;
-  box-shadow: var(--shadow-sm);
+  box-shadow: none;
   transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
