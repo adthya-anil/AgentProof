@@ -226,46 +226,30 @@ active at runtime.
 ## How it works
 
 ```mermaid
-flowchart LR
-    subgraph sources["1 · Scenario sources"]
-        direction TB
-        REG["12 fixed regression<br/><i>exact reproductions</i>"]
-        PER["4 state-perturbation<br/><i>world moves mid-journey</i>"]
-        GEN["AI-generated<br/><i>adversarial goals</i>"]
-    end
+flowchart TB
+    REG["12 fixed regression"] --> AGENT
+    PER["4 state-perturbation"] --> AGENT
+    GEN["AI-generated adversarial"] --> AGENT
 
-    AGENT["2 · <b>Buyer agent</b><br/>LLM tool loop<br/><i>scripted · OpenAI · Anthropic</i>"]
+    AGENT["Buyer agent · LLM tool loop"]
+    AGENT -->|"every tool call"| GUARD
 
-    GUARD{"3 · <b>AgentProof Guard</b><br/>12 deterministic invariants<br/><i>arithmetic, never an LLM</i>"}
+    GUARD{"AgentProof Guard<br/>12 deterministic invariants"}
+    GUARD -->|"block"| BLOCK["BLOCKED<br/>no payable order is created"]
+    GUARD -->|"allow"| MERCH["Merchant under test<br/>HamperHub · Nordwell · any endpoint"]
 
-    BLOCK["<b>BLOCKED</b><br/>violation + attribution<br/><i>no payable order exists</i>"]
+    MERCH --> PAY["Razorpay test mode<br/>or offline fake"]
+    GUARD -.-> AUDIT["Hash-chained audit log"]
 
-    subgraph merchants["4 · Merchant under test"]
-        direction TB
-        HH["HamperHub<br/><i>17 products · 8 seeded defects</i>"]
-        NW["Nordwell<br/><i>separate GraphQL service</i>"]
-        ANY["Any endpoint you paste<br/><i>via mapping DSL</i>"]
-    end
-
-    PAY["5 · Razorpay test mode<br/><i>or offline fake</i>"]
-    AUDIT["Hash-chained audit log<br/><i>tamper-evident</i>"]
-
-    sources --> AGENT
-    AGENT -->|"requests a tool call"| GUARD
-    GUARD -->|"block"| BLOCK
-    GUARD -->|"allow"| merchants
-    merchants --> PAY
-    GUARD -.-> AUDIT
-    BLOCK -.-> AUDIT
-
-    style GUARD fill:#eef1ff,stroke:#2b50ed,stroke-width:3px
-    style BLOCK fill:#fdf1f0,stroke:#b02a1e,stroke-width:2px
-    style AUDIT fill:#e9f8f0,stroke:#0a6c46
-    style AGENT fill:#ffffff,stroke:#5d6885
-    style PAY fill:#ffffff,stroke:#5d6885
+    classDef guard stroke:#2b50ed,stroke-width:3px
+    classDef bad stroke:#b02a1e,stroke-width:2px
+    classDef good stroke:#0a6c46,stroke-width:2px
+    class GUARD guard
+    class BLOCK bad
+    class AUDIT good
 ```
 
-Read it left to right: scenarios drive an agent, **every** tool call the agent
+Read it top to bottom: scenarios drive an agent, **every** tool call the agent
 makes passes through the Guard, and only an `allow` reaches the merchant. The
 Guard re-reads live merchant state before deciding — the
 [sequence below](#the-structural-guarantee) shows that handshake in detail.
@@ -338,11 +322,14 @@ flowchart TD
     Q4 -->|no| IN["<b>inconclusive</b><br/>verified nothing;<br/>excluded from coverage"]
     Q4 -->|yes| PA["<b>passed</b><br/>completed cleanly"]
 
-    style UV fill:#fdf1f0,stroke:#b02a1e
-    style SR fill:#f6f8fc,stroke:#5d6885
-    style ES fill:#fdf6e7,stroke:#9a5b06
-    style IN fill:#ffffff,stroke:#c9d3e1,stroke-dasharray: 4 4
-    style PA fill:#e9f8f0,stroke:#0a6c46
+    classDef bad stroke:#b02a1e,stroke-width:2px
+    classDef warn stroke:#9a5b06,stroke-width:2px
+    classDef good stroke:#0a6c46,stroke-width:2px
+    classDef dim stroke-dasharray: 5 5
+    class UV bad
+    class ES warn
+    class PA good
+    class IN dim
 ```
 
 Two consequences worth stating plainly:
@@ -737,21 +724,24 @@ from it, and the same twelve invariants render the verdict. The report names the
 endpoint it tested, so a verdict can never be mistaken for one about a different shop.
 
 ```mermaid
-flowchart LR
-    URL["Paste any<br/>storefront URL"] --> SSRF{"Address<br/>allowed?"}
-    SSRF -->|"refused"| STOP["Rejected, naming the<br/>rule that stopped it"]
-    SSRF -->|"allowed"| READ["Read one<br/>real response"]
-    READ --> INFER["A model proposes<br/>a field mapping"]
+flowchart TB
+    URL["Paste any storefront URL"] --> SSRF{"Address allowed?"}
+    SSRF -->|"refused"| STOP["Rejected, naming the rule"]
+    SSRF -->|"allowed"| READ["Read one real response"]
+    READ --> INFER["A model proposes a field mapping"]
     INFER --> VALID{"Build real Product objects<br/>through the same strict readers"}
     VALID -->|"refused"| INFER
-    VALID -->|"accepted"| CAPS["Derive capabilities<br/><i>from the mapping itself</i>"]
-    CAPS --> HOLD["Withhold rules whose inputs<br/>the merchant cannot supply"]
-    HOLD --> SUITE["Run the suite<br/><i>agents pick their own products</i>"]
-    SUITE --> VERDICT["<b>Verdict</b><br/>naming which rules ran<br/>and which were withheld"]
+    VALID -->|"accepted"| CAPS["Derive capabilities from the mapping"]
+    CAPS --> HOLD["Withhold rules the merchant<br/>cannot supply inputs for"]
+    HOLD --> SUITE["Run the suite"]
+    SUITE --> VERDICT["Verdict — which rules ran,<br/>which were withheld"]
 
-    style VERDICT fill:#eef1ff,stroke:#2b50ed,stroke-width:3px
-    style STOP fill:#fdf1f0,stroke:#b02a1e
-    style HOLD fill:#fdf6e7,stroke:#9a5b06,stroke-width:2px
+    classDef guard stroke:#2b50ed,stroke-width:3px
+    classDef bad stroke:#b02a1e,stroke-width:2px
+    classDef warn stroke:#9a5b06,stroke-width:2px
+    class VERDICT guard
+    class STOP bad
+    class HOLD warn
 ```
 
 Three gates in that chain do the real work:
@@ -1386,35 +1376,28 @@ change the *merchant's* behaviour — they never touch the Guard or the invarian
 and the scenario suite is not told which is active.
 
 ```mermaid
-flowchart LR
-    subgraph iso["Scored one mutant at a time"]
-        direction TB
-        D1["Seed defect 1<br/><i>discount_stacking</i>"]
-        D2["Seed defect 2<br/><i>missing_quote_expiry</i>"]
-        DN["… 8 defects total"]
-    end
+flowchart TB
+    SEED["Seed ONE defect<br/>8 defects, scored one at a time"]
+    SEED --> RUN["Run that defect's journey"]
+    RUN --> CHK{"Did the expected<br/>invariant fire?"}
+    CHK -->|"yes"| HIT["detected"]
+    CHK -->|"no"| MISS["missed"]
 
-    RUN["Run that defect's<br/>regression journey"]
-    CHK{"Did the expected<br/>invariant fire?"}
+    CLEAN["Run the fixed merchant<br/>zero defects present"]
+    CLEAN --> FLAG{"Did any rule fire<br/>on correct code?"}
+    FLAG -->|"yes"| FP["false positive"]
+    FLAG -->|"no"| QUIET["stayed quiet"]
 
-    iso --> RUN --> CHK
-    CHK -->|yes| HIT["detected"]
-    CHK -->|no| MISS["missed"]
-
-    CLEAN["Run the <b>fixed</b> merchant<br/><i>zero defects present</i>"]
-    FLAG{"Did any rule fire<br/>on correct code?"}
-    CLEAN --> FLAG
-    FLAG -->|yes| FP["false positive"]
-    FLAG -->|no| OK["stayed quiet"]
-
-    HIT --> CARD["<b>Scorecard</b><br/>recall 8/8 · false positives 0/25"]
+    HIT --> CARD["Scorecard<br/>recall 8/8 · false positives 0/25"]
     MISS --> CARD
     FP --> CARD
-    OK --> CARD
+    QUIET --> CARD
 
-    style CARD fill:#eef1ff,stroke:#2b50ed,stroke-width:2px
-    style MISS fill:#fdf1f0,stroke:#b02a1e
-    style FP fill:#fdf1f0,stroke:#b02a1e
+    classDef guard stroke:#2b50ed,stroke-width:3px
+    classDef bad stroke:#b02a1e,stroke-width:2px
+    class CARD guard
+    class MISS bad
+    class FP bad
 ```
 
 **Both halves are load-bearing.** Recall alone is trivially gamed — a rule that
