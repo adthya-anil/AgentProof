@@ -4,6 +4,17 @@
 
 > Test every path an AI buyer might take before money moves.
 
+### ▶ [Watch the 5-minute demo](https://drive.google.com/file/d/10_eRrz9TB34TKWCv_IBnI5zICEDs3Zx3/view?usp=sharing)
+
+A live agent shops a real store, gets blocked mid-transaction, and a real Razorpay
+test payment is captured — plus the run where **Razorpay is never called at all**,
+because the verdict failed.
+
+**Jump to:** [What it solves](#in-one-sentence) · [60-second version](#read-this-in-60-seconds)
+· [Architecture](#architecture) · [Try it in 5 minutes](#see-it-yourself-in-five-minutes)
+· [Measured results](#measured-results) · [The 12 rules](#the-deterministic-invariants)
+· [Limitations](#limitations)
+
 ---
 
 ## In one sentence
@@ -223,7 +234,7 @@ active at runtime.
 
 ---
 
-## How it works
+## Architecture
 
 ```mermaid
 flowchart TB
