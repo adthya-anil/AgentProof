@@ -25,7 +25,8 @@
     "demo:razorpay": "tsx src/scripts/razorpay-live.ts",
     "demo:merchant": "tsx src/scripts/second-merchant.ts",
     "demo:infer": "tsx src/scripts/infer-mapping.ts",
-    "demo:merchant-preflight": "tsx src/scripts/merchant-preflight.ts"
+    "demo:merchant-preflight": "tsx src/scripts/merchant-preflight.ts",
+    "nordwell:serve": "tsx nordwell-service/server.ts"
   },
   "dependencies": {
     "next": "^15.5.24",

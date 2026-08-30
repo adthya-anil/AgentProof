@@ -1,0 +1,20 @@
+# Nordwell Provisions, deployed as its own service.
+#
+# `type: web` with a start command is a long-lived container, which this merchant requires:
+# its catalogue is in memory and the perturbation faults write to it. On a host that starts a
+# fresh instance per request the price-drift journey would report that this merchant's prices
+# cannot be moved — the engine would be right and the deployment would be wrong.
+#
+# Deliberately not the AgentProof app. The point of deploying is that the merchant answers
+# from somewhere AgentProof does not control.
+services:
+  - type: web
+    name: nordwell-provisions
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm run nordwell:serve
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
