@@ -68,28 +68,102 @@ export function merchantTimeoutMs(): number {
 export function withTimeout(fetcher: Fetcher, timeoutMs: number): Fetcher {
   return async (url, init) => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    /**
+     * Raced, not merely signalled.
+     *
+     * Passing an `AbortSignal` is a request, and it only bounds anything if the fetcher
+     * honours it. Real `fetch` does; a wrapper that retries internally, or any fetcher that
+     * ignores the signal, does not — and the first version of this deadlocked against one,
+     * which is how a bound that exists only on paper gets discovered.
+     */
+    const expiry = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(
+          new TransportError(
+            `the merchant did not respond within ${timeoutMs}ms`,
+            null,
+          ),
+        );
+      }, timeoutMs);
+    });
+
     try {
-      return await fetcher(url, { ...init, signal: controller.signal });
+      return await Promise.race([
+        fetcher(url, { ...init, signal: controller.signal }),
+        expiry,
+      ]);
     } catch (error) {
-      // Already diagnosed, and more precisely than anything this layer could add.
+      // Already diagnosed, more precisely than this layer could manage.
       if (error instanceof TransportError) throw error;
 
-      if (controller.signal.aborted) {
+      if (isNetworkFailure(error)) {
+        const detail = error instanceof Error ? error.message : String(error);
         throw new TransportError(
-          `the merchant did not respond within ${timeoutMs}ms`,
+          `the merchant could not be reached: ${detail}`,
           null,
         );
       }
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new TransportError(
-        `the merchant could not be reached: ${detail}`,
-        null,
-      );
+
+      /**
+       * Anything unrecognised is left exactly as it was.
+       *
+       * Converting every exception here would have relabelled a bug in our own code as the
+       * merchant being down — which routes it to `INCONCLUSIVE` and stops the run failing.
+       * "Inconclusive" must not become the place crashes go to hide, so the conversion is
+       * deliberately limited to failures that are recognisably the network's.
+       */
+      throw error;
     } finally {
       clearTimeout(timer);
     }
   };
+}
+
+/**
+ * Codes and shapes the runtime raises when the other end is simply not there.
+ *
+ * Matched on `code` rather than message text, because these come from undici and the TLS
+ * stack with wording that changes between Node versions.
+ */
+const NETWORK_ERROR_CODES = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ENOTFOUND",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+  "EPROTO",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "CERT_HAS_EXPIRED",
+]);
+
+/**
+ * Whether a failure is the network's rather than ours.
+ *
+ * Lives here so the transport and the runner cannot disagree about it: the runner turns this
+ * answer into `INCONCLUSIVE` instead of `NOT READY`, and two copies of the rule would
+ * eventually drift into a verdict that depended on which layer noticed first.
+ */
+export function isNetworkFailure(error: unknown): boolean {
+  if (error instanceof TransportError) return true;
+  if (!(error instanceof Error)) return false;
+
+  // `AbortSignal.timeout` raises TimeoutError; an aborted controller raises AbortError.
+  if (error.name === "TimeoutError" || error.name === "AbortError") return true;
+
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === "string" && NETWORK_ERROR_CODES.has(code)) return true;
+
+  // undici reports this bare message on the outer error and hides the detail in `cause`.
+  if (error.message.includes("fetch failed")) return true;
+
+  const cause = (error as { cause?: unknown }).cause;
+  return cause === undefined || cause === null ? false : isNetworkFailure(cause);
 }
 
 /**

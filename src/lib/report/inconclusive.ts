@@ -19,6 +19,19 @@ import type { JourneyResult } from "../runner/run.js";
  * wording cannot drift into yet another version of the same mistake.
  */
 export interface InconclusiveBreakdown {
+  /** The merchant could not be reached — refused, unresolvable, 5xx, or timed out. */
+  merchantUnreachable: number;
+  /** The scenario needed a payment provider that can be told to fail. */
+  needsSimulatedProvider: number;
+  /**
+   * Inconclusive with no cause recorded.
+   *
+   * Exists so the arithmetic cannot silently break. A journey whose reason this describer
+   * does not know would otherwise vanish from the causes while still counting toward the
+   * total, and the sentence would claim "3 journeys" then account for one. A reader adding
+   * it up finds the report short and has no way to tell which part is wrong.
+   */
+  unattributed: number;
   /** The invariant the journey targets cannot run against this merchant at all. */
   targetWithheld: number;
   /** The agent never reached the tool the fault targets, so the fault was never attempted. */
@@ -42,12 +55,28 @@ export function inconclusiveBreakdown(
   const count = (reason: string) =>
     inconclusive.filter((j) => j.inconclusiveReason === reason).length;
 
-  return {
+  const known = {
+    merchantUnreachable: count("merchant_unreachable"),
+    needsSimulatedProvider: count("fault_needs_simulated_provider"),
     targetWithheld: count("target_withheld"),
     faultTriggerNotReached: count("fault_trigger_not_reached"),
     faultRejectedByMerchant: count("fault_rejected_by_merchant"),
     agentStopped: count("agent_stopped"),
     targetNotExercised: count("target_not_exercised"),
+  };
+
+  /**
+   * Whatever is left over, counted rather than dropped.
+   *
+   * Derived by subtraction on purpose: adding a new `InconclusiveReason` and forgetting to
+   * teach this function about it is the obvious future mistake, and this makes the omission
+   * show up in the sentence instead of quietly unbalancing it.
+   */
+  const attributed = Object.values(known).reduce((sum, n) => sum + n, 0);
+
+  return {
+    ...known,
+    unattributed: Math.max(0, inconclusive.length - attributed),
     total: inconclusive.length,
   };
 }
@@ -64,6 +93,22 @@ export function describeInconclusive(
   if (breakdown.total === 0) return null;
 
   const parts: string[] = [];
+  /**
+   * First, because it is the only cause that is not about the agent or the scenario. When the
+   * merchant was unreachable, nothing else in the sentence explains anything.
+   */
+  if (breakdown.merchantUnreachable > 0) {
+    parts.push(
+      `${breakdown.merchantUnreachable} because the merchant could not be reached — ` +
+        "refused, unresolvable, or too slow to answer",
+    );
+  }
+  if (breakdown.needsSimulatedProvider > 0) {
+    parts.push(
+      `${breakdown.needsSimulatedProvider} because the scenario needs a payment provider ` +
+        "that can be told to fail, and a real one cannot",
+    );
+  }
   if (breakdown.targetWithheld > 0) {
     parts.push(
       `${breakdown.targetWithheld} because the invariant it targets cannot run ` +
@@ -93,6 +138,11 @@ export function describeInconclusive(
       `${breakdown.agentStopped} because the agent stopped early — out of tool budget ` +
         "or declining to proceed",
     );
+  }
+  // Says so rather than letting the count go missing. An honest "we did not record why" is
+  // worth more than a sentence whose numbers do not add up.
+  if (breakdown.unattributed > 0) {
+    parts.push(`${breakdown.unattributed} for a reason that was not recorded`);
   }
 
   const causes =
