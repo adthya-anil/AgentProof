@@ -42,16 +42,25 @@
    * Three levels of text, not two. Body copy at full contrast, supporting prose one step
    * down, and labels one step further — so `.note` can be quiet without being faint.
    */
-  --text: #15181d;
-  --text-2: #474d57;
+  /*
+   * Darker than a token generator would suggest, on purpose.
+   *
+   * The first pass used a conventional grey ramp that cleared WCAG comfortably and still read
+   * as washed out on a real screen — the ratio is a floor for legibility, not a target for
+   * comfort. Values a reader described as "almost invisible" are wrong whatever they measure,
+   * so secondary text moved close to the primary and labels are now a mid-grey rather than a
+   * light one.
+   */
+  --text: #101317;
+  --text-2: #383e46;
   /*
    * Chosen against the tint, not against white.
    *
-   * The obvious grey cleared 4.5:1 on a white card and then failed at 4.38:1 on `--surface-2`
-   * — which is exactly where the smallest type in the product sits, the uppercase table
-   * headers. A label that passes on the background it is not used on is not passing.
+   * An earlier grey cleared 4.5:1 on a white card and then failed at 4.38:1 on `--surface-2` —
+   * which is exactly where the smallest type in the product sits, the uppercase table headers.
+   * A label that passes on the background it is not used on is not passing.
    */
-  --muted: #666c75;
+  --muted: #5b616a;
 
   --accent: #0a66e0;
   --accent-hover: #0954b8;
@@ -75,8 +84,8 @@
   --info-bg: #f4f3ff;
   --info-border: #d9d6fe;
 
-  --radius: 12px;
-  --radius-sm: 8px;
+  --radius: 14px;
+  --radius-sm: 9px;
   --radius-xs: 6px;
 
   /* Two very soft layers. Cards should feel lifted, not dropped from a height. */
@@ -102,7 +111,14 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--sans);
-  font-size: 15px;
+  /*
+   * 16px, which is the browser default for a reason.
+   *
+   * 15px was a habit borrowed from dense dashboards, and this product is not one — it argues
+   * in prose about money and is read at length. Every rem-based size in this sheet scales with
+   * this line.
+   */
+  font-size: 16px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -169,7 +185,7 @@ code {
 }
 
 .masthead h1 {
-  font-size: 1.15rem;
+  font-size: 1.25rem;
   font-weight: 640;
   letter-spacing: -0.021em;
   margin: 0;
@@ -183,7 +199,7 @@ code {
 
 .tagline {
   color: var(--muted);
-  font-size: 0.8rem;
+  font-size: 0.875rem;
   line-height: 1.5;
   margin: 0;
 }
@@ -208,10 +224,10 @@ code {
   display: flex;
   align-items: center;
   gap: 0.6rem;
-  padding: 0.5rem 0.7rem;
+  padding: 0.55rem 0.75rem;
   border-radius: var(--radius-sm);
   color: var(--text-2);
-  font-size: 0.875rem;
+  font-size: 0.9375rem;
   font-weight: 480;
   line-height: 1.35;
   transition: background 0.12s ease, color 0.12s ease;
@@ -232,7 +248,7 @@ code {
  * a region rather than introduce content, so they should sit below the reading line.
  */
 .tabs .group {
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-weight: 620;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -244,10 +260,23 @@ code {
 }
 
 /* ---- content column ---- */
+/*
+ * Hugs the rail and then fills the window.
+ *
+ * This was `max-width: 1120px; margin: 0 auto` with the rail's width added as left padding,
+ * which is a contradiction: the box centres itself in the viewport while a third of it is
+ * reserved for a sidebar that is already fixed to the left. The visible result was a ~440px
+ * column of content floating in the middle of the screen with a quarter of the window empty on
+ * the right — and tables, which are most of this product, squeezed hardest.
+ *
+ * `margin-left` reserves the rail; no auto-centring, so the content starts where the rail ends
+ * and extends. The cap is generous rather than a reading measure because the widest thing here
+ * is a twenty-row journey table, not a paragraph.
+ */
 .shell {
-  max-width: 1120px;
-  margin: 0 auto;
-  padding: 2.25rem 2rem 5rem calc(var(--rail) + 2rem);
+  margin: 0 0 0 var(--rail);
+  max-width: 1380px;
+  padding: 2.5rem 2.75rem 5rem;
 }
 
 /*
@@ -295,7 +324,7 @@ code {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-sm);
-  padding: 1.35rem 1.5rem;
+  padding: 1.6rem 1.75rem;
   margin-bottom: 1.25rem;
 }
 
@@ -306,7 +335,7 @@ code {
  * paragraph — the single change that most made this look machine-generated.
  */
 .panel h2 {
-  font-size: 1.0625rem;
+  font-size: 1.1875rem;
   font-weight: 620;
   letter-spacing: -0.014em;
   color: var(--text);
@@ -314,7 +343,7 @@ code {
 }
 
 .panel h3 {
-  font-size: 0.9375rem;
+  font-size: 1.0625rem;
   font-weight: 600;
   color: var(--text);
   margin: 1.5rem 0 0.6rem;
@@ -325,13 +354,13 @@ code {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 1rem 1.75rem;
-  font-size: 0.875rem;
+  font-size: 0.9375rem;
   color: var(--text-2);
 }
 .meta div span {
   display: block;
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   font-weight: 550;
   letter-spacing: 0.01em;
   text-transform: none;
@@ -350,10 +379,10 @@ code {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0.9rem 1rem;
+  padding: 1.05rem 1.15rem;
 }
 .stat .n {
-  font-size: 1.625rem;
+  font-size: 1.875rem;
   font-weight: 620;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
@@ -363,7 +392,7 @@ code {
 /* Sentence case: a stat label is read, not scanned past. */
 .stat .k {
   color: var(--muted);
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   font-weight: 500;
   text-transform: none;
   letter-spacing: 0;
@@ -406,7 +435,7 @@ code {
   align-items: flex-start;
   gap: 0.85rem;
   font-weight: 620;
-  font-size: 1.0625rem;
+  font-size: 1.1875rem;
   letter-spacing: -0.01em;
   padding: 1.1rem 1.25rem;
   border-radius: var(--radius);
@@ -448,7 +477,7 @@ code {
 .readiness small {
   display: block;
   font-weight: 420;
-  font-size: 0.8125rem;
+  font-size: 0.9rem;
   line-height: 1.55;
   color: var(--text-2);
   margin-top: 0.25rem;
@@ -460,23 +489,33 @@ code {
    Most of this product is tables, so they get the most attention: a tinted header that stays
    put, generous row height, a hover band to hold the eye across a wide row, and tabular
    figures so columns of money line up on the decimal. */
-.panel table {
-  margin: 0 -0.25rem;
-  width: calc(100% + 0.5rem);
+/*
+ * Long cell content wraps instead of widening the table.
+ *
+ * The journey table carries a tool path that can run to a dozen calls, and the natural width of
+ * that string would otherwise set the width of the page. `overflow-wrap` on the cell is the
+ * honest fix: `overflow-x` on a table element is silently ignored by browsers, so a scroll
+ * container would need markup that does not exist here.
+ */
+table {
+  table-layout: auto;
+}
+td {
+  overflow-wrap: anywhere;
 }
 table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.875rem;
+  font-size: 0.9375rem;
 }
 th {
   text-align: left;
   color: var(--muted);
   font-weight: 600;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  padding: 0.55rem 0.75rem;
+  padding: 0.65rem 0.85rem;
   background: var(--surface-2);
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
@@ -490,7 +529,7 @@ th:last-child {
   border-bottom-right-radius: var(--radius-xs);
 }
 td {
-  padding: 0.7rem 0.75rem;
+  padding: 0.8rem 0.85rem;
   border-bottom: 1px solid var(--border);
   vertical-align: top;
   color: var(--text-2);
@@ -515,7 +554,7 @@ th.num {
   display: inline-block;
   padding: 0.15rem 0.55rem;
   border-radius: 999px;
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   font-weight: 550;
   letter-spacing: 0;
   white-space: nowrap;
@@ -581,7 +620,7 @@ th.num {
   display: inline-block;
   padding: 0.1rem 0.45rem;
   border-radius: var(--radius-xs);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-weight: 600;
   letter-spacing: 0.03em;
   white-space: nowrap;
@@ -621,12 +660,12 @@ th.num {
   margin-bottom: 0.45rem;
 }
 .violation .msg {
-  font-size: 0.9375rem;
+  font-size: 1rem;
   color: var(--text);
 }
 .violation .fix {
   margin-top: 0.65rem;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   color: var(--text-2);
   border-top: 1px solid var(--border);
   padding-top: 0.55rem;
@@ -636,7 +675,7 @@ th.num {
   grid-template-columns: auto 1fr;
   gap: 0.2rem 0.85rem;
   margin: 0.6rem 0 0;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
 }
 .violation dt {
   color: var(--muted);
@@ -661,7 +700,7 @@ th.num {
   gap: 0.85rem;
   padding: 0.55rem 0;
   border-bottom: 1px solid var(--border);
-  font-size: 0.875rem;
+  font-size: 0.9375rem;
 }
 .trace li:last-child {
   border-bottom: 0;
@@ -676,7 +715,7 @@ th.num {
 }
 .trace .type {
   color: var(--muted);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -712,14 +751,14 @@ th.num {
 }
 
 .lead {
-  font-size: 0.9375rem;
+  font-size: 1rem;
   color: var(--text);
   line-height: 1.65;
 }
 
 .empty {
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: 0.9375rem;
   padding: 1rem 0;
 }
 
@@ -791,7 +830,7 @@ th.num {
 }
 
 .kv {
-  font-size: 0.875rem;
+  font-size: 0.9375rem;
 }
 .kv div {
   display: flex;
@@ -1041,7 +1080,7 @@ ol.live pre {
   list-style: none;
   margin: 0;
   padding: 0.5rem 0 0.7rem;
-  font-size: 0.8375rem;
+  font-size: 0.9rem;
   color: var(--text-2);
 }
 .steps li {
@@ -1066,7 +1105,7 @@ ol.live pre {
   border-left: 3px solid var(--bad);
   padding: 0.45rem 0 0.45rem 0.8rem;
   margin-bottom: 0.5rem;
-  font-size: 0.8625rem;
+  font-size: 0.9rem;
   color: var(--text-2);
 }
 .finding > div + div {
@@ -1087,7 +1126,7 @@ ol.live pre {
 .field > span {
   display: block;
   margin-bottom: 0.35rem;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   font-weight: 550;
   color: var(--text-2);
 }
@@ -1103,7 +1142,7 @@ ol.live pre {
   font: inherit;
   /* A URL is read character by character when it is wrong, which is when it matters. */
   font-family: var(--mono);
-  font-size: 0.8375rem;
+  font-size: 0.9rem;
   box-shadow: var(--shadow-sm);
   transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
