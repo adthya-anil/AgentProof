@@ -11,7 +11,12 @@ import {
   describeInconclusive,
   inconclusiveBreakdown,
 } from "../src/lib/report/inconclusive.js";
-import { countDecided, runSuite } from "../src/lib/runner/run.js";
+import type { Violation } from "../src/lib/policy/violations.js";
+import {
+  countDecided,
+  runSuite,
+  sumMoneyAtRiskByOrder,
+} from "../src/lib/runner/run.js";
 import { REGRESSION_SCENARIOS } from "../src/lib/scenarios/regression.js";
 
 /**
@@ -610,5 +615,103 @@ describe("a live twin that avoided its own hazard is inconclusive, not passed", 
     expect(reg12.firedInvariants).toContain("INV-BUDGET");
     expect(reg12.inconclusiveReason).not.toBe("target_not_exercised");
     expect(reg12.disposition).not.toBe("inconclusive");
+  });
+});
+
+
+describe("one order's money at risk, when several rules object to it", () => {
+  /**
+   * A minimal violation. Only the three fields the money rule reads are meaningful; the rest
+   * exist because the type demands them.
+   */
+  function violation(
+    invariantId: string,
+    intentId: string,
+    moneyAtRiskMinor: number,
+  ): Violation {
+    return {
+      id: `vio_${invariantId}_${intentId}_${moneyAtRiskMinor}`,
+      invariantId,
+      title: invariantId,
+      severity: "high",
+      checkpoint: "checkout.requested",
+      policyRefs: [],
+      attribution: "integration",
+      message: "",
+      observed: {},
+      expected: {},
+      moneyAtRiskMinor,
+      remediation: null,
+      runId: "run",
+      intentId,
+      quoteId: null,
+      at: new Date(0),
+      detectedAtMs: 0,
+    };
+  }
+
+  /**
+   * The bug that started this: two rules objecting to one ₹1,399 order reported ₹2,798.
+   * The order can be lost once.
+   */
+  it("counts one order once, however many rules objected", () => {
+    const total = sumMoneyAtRiskByOrder([
+      violation("INV-INVENTORY", "intent_a", 139900),
+      violation("INV-QUOTE-EXPIRY", "intent_a", 139900),
+    ]);
+
+    expect(total).toBe(139900);
+  });
+
+  /**
+   * The case no journey in the suite produces, and the reason this test exists.
+   *
+   * With unequal amounts on one order, max, min and first-wins finally disagree — and only
+   * max is right, because the exposure is the worst of what the rules found, not the mildest.
+   * Understating money at risk is the single direction of error this report must never make.
+   *
+   * Swapping max for min does not go unnoticed today: the test pinning the README's published
+   * totals fails too. But it fails as "the headline figures moved", which sends the reader to
+   * the report and its inputs rather than to the one line of arithmetic at fault. This fails
+   * by name instead.
+   */
+  it("takes the largest exposure when rules disagree about one order", () => {
+    const total = sumMoneyAtRiskByOrder([
+      violation("INV-DISCOUNT-CAP", "intent_a", 3433),
+      violation("INV-FLOOR-PRICE", "intent_a", 10046),
+    ]);
+
+    expect(total).toBe(10046);
+    // Not the sum, which was the original bug.
+    expect(total).not.toBe(13479);
+    // And not the smaller figure, which would quietly understate the risk.
+    expect(total).not.toBe(3433);
+  });
+
+  it("does not care what order the rules arrive in", () => {
+    const ascending = sumMoneyAtRiskByOrder([
+      violation("INV-DISCOUNT-CAP", "intent_a", 3433),
+      violation("INV-FLOOR-PRICE", "intent_a", 10046),
+    ]);
+    const descending = sumMoneyAtRiskByOrder([
+      violation("INV-FLOOR-PRICE", "intent_a", 10046),
+      violation("INV-DISCOUNT-CAP", "intent_a", 3433),
+    ]);
+
+    expect(ascending).toBe(descending);
+  });
+
+  /** Distinct orders are distinct money, so those genuinely add up. */
+  it("still adds separate orders together", () => {
+    const total = sumMoneyAtRiskByOrder([
+      violation("INV-IDEMPOTENCY", "intent_a", 139900),
+      violation("INV-PRICE-BINDING", "intent_b", 5000),
+    ]);
+
+    expect(total).toBe(144900);
+  });
+
+  it("reports nothing at risk when nothing objected", () => {
+    expect(sumMoneyAtRiskByOrder([])).toBe(0);
   });
 });

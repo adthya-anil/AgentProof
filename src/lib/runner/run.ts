@@ -41,7 +41,18 @@ import { type PerturbationEvent, PerturbingToolCaller } from "./perturbation.js"
  * over-reporting one order's exposure is safer than double-counting it — and no
  * divergence is expected because every rule keys its figure off the same order.
  */
-function sumMoneyAtRiskByOrder(rows: readonly Violation[]): Minor {
+/**
+ * Exported so the money rule has a test that names it.
+ *
+ * `reg-04` is the only journey in the suite that fires two invariants on one order, and both
+ * amounts are ₹1,399 — equal, so max, min and first-wins all report the same figure and none
+ * of them can be told apart there. Swapping max for min is caught, but only by the test that
+ * pins the README's published totals, which fails as "the headline numbers moved" and sends
+ * the reader to the report rather than to this rule. Taking the min would understate money at
+ * risk, the one direction of error this product cannot afford, so it is worth a case with
+ * unequal amounts that fails by name.
+ */
+export function sumMoneyAtRiskByOrder(rows: readonly Violation[]): Minor {
   const byOrder = new Map<string, Minor>();
   for (const row of rows) {
     const key = row.intentId || row.quoteId || row.id;
