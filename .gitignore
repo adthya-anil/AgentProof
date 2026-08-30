@@ -10,3 +10,6 @@ runs/
 
 # TypeScript incremental build cache
 *.tsbuildinfo
+
+# Agent planning scaffolding. Working notes, not product code.
+.agents/

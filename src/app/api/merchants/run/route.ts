@@ -8,7 +8,7 @@ import { MerchantAdapter } from "@/lib/merchant/adapter";
 import { inferMapping } from "@/lib/merchant/infer";
 import { type MerchantSchema, parseMerchantSchema } from "@/lib/merchant/mapping";
 import { AdapterCatalogSource } from "@/lib/merchant/source";
-import { transportFor } from "@/lib/merchant/transport";
+import { merchantTimeoutMs, transportFor } from "@/lib/merchant/transport";
 import { NORDWELL_MAPPING } from "@/lib/merchants/nordwell";
 import { CAPABILITIES, describeCapability } from "@/lib/policy/capabilities";
 import { loadPolicyFromFile } from "@/lib/policy/load";
@@ -55,6 +55,14 @@ function atEndpoint(schema: MerchantSchema, endpoint: string): MerchantSchema {
   return { ...schema, transport: { ...schema.transport, endpoint } as never };
 }
 
+/**
+ * The reset and sample reads, bounded like everything else.
+ *
+ * This helper predates the transport and calls `fetch` directly, so it did not inherit the
+ * transport's timeout. It runs *before* any journey — reading one response to infer the
+ * mapping — so an unresponsive endpoint hung here, before a single event reached the
+ * browser. The page showed a spinner with nothing behind it.
+ */
 async function graphql(
   endpoint: string,
   query: string,
@@ -64,6 +72,7 @@ async function graphql(
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ query, variables }),
+    signal: AbortSignal.timeout(merchantTimeoutMs()),
   });
   const body = (await response.json()) as { errors?: Array<{ message?: string }> };
   if (body.errors?.length) {

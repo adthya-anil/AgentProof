@@ -14,7 +14,12 @@ import { type MerchantSchema, readPath } from "./mapping.js";
 /** Injectable so tests need no network and no mock server. */
 export type Fetcher = (
   url: string,
-  init?: { method?: string; headers?: Record<string, string>; body?: string },
+  init?: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+    signal?: AbortSignal;
+  },
 ) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
 
 export class TransportError extends Error {
@@ -25,6 +30,66 @@ export class TransportError extends Error {
     super(message);
     this.name = "TransportError";
   }
+}
+
+/**
+ * How long a third party gets to answer.
+ *
+ * There was no timeout at all, which is survivable against a merchant running in this
+ * process and indefensible against one that is not. A hung connection stalled a run until
+ * the route's own 30-minute ceiling: the page sat there, the suite produced nothing, and
+ * the only signal a user got was that the product appeared broken.
+ *
+ * Ten seconds is generous for a catalogue read and short enough that a dead endpoint is
+ * diagnosed rather than waited on. Overridable because a slow staging merchant is a real
+ * thing and not a reason to be untestable.
+ */
+export const DEFAULT_MERCHANT_TIMEOUT_MS = 10_000;
+
+export function merchantTimeoutMs(): number {
+  const raw = Number(process.env.MERCHANT_TIMEOUT_MS);
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_MERCHANT_TIMEOUT_MS;
+  return Math.trunc(raw);
+}
+
+/**
+ * Bounds a fetcher in time and gives every network failure one recognisable type.
+ *
+ * Wrapped at this single seam rather than at each call site, because there are nine of
+ * them across two transports and a tenth would eventually be added without a timeout.
+ *
+ * The conversion matters as much as the timeout. A refused connection, an unresolvable
+ * host, a TLS failure and an abort all arrive here as unrelated exception shapes, and
+ * anything the runner cannot recognise as a *merchant* failure it treats as a bug in the
+ * harness — which reports the run `NOT READY`, an accusation about the integration's
+ * safety drawn from our own inability to open a socket. Naming them all `TransportError`
+ * is what lets that verdict be `INCONCLUSIVE` instead.
+ */
+export function withTimeout(fetcher: Fetcher, timeoutMs: number): Fetcher {
+  return async (url, init) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetcher(url, { ...init, signal: controller.signal });
+    } catch (error) {
+      // Already diagnosed, and more precisely than anything this layer could add.
+      if (error instanceof TransportError) throw error;
+
+      if (controller.signal.aborted) {
+        throw new TransportError(
+          `the merchant did not respond within ${timeoutMs}ms`,
+          null,
+        );
+      }
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new TransportError(
+        `the merchant could not be reached: ${detail}`,
+        null,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  };
 }
 
 /**
@@ -307,12 +372,24 @@ export class GraphQLTransport implements CatalogTransport {
   }
 }
 
-/** Builds the transport a mapping asks for. */
+/**
+ * Builds the transport a mapping asks for, always bounded in time.
+ *
+ * The timeout is applied here rather than left to callers, so no transport can be
+ * constructed without one. Injected fetchers are wrapped too: a test double resolves
+ * instantly and is unaffected, while a script or route that passes its own fetcher still
+ * cannot accidentally opt out of the bound.
+ */
 export function transportFor(
   schema: MerchantSchema,
   fetcher?: Fetcher,
+  timeoutMs: number = merchantTimeoutMs(),
 ): CatalogTransport {
+  const bounded = withTimeout(
+    fetcher ?? (globalThis.fetch as Fetcher),
+    timeoutMs,
+  );
   return schema.transport.kind === "rest"
-    ? new RestTransport(schema.transport, schema.product.id, fetcher)
-    : new GraphQLTransport(schema.transport, schema.product.id, fetcher);
+    ? new RestTransport(schema.transport, schema.product.id, bounded)
+    : new GraphQLTransport(schema.transport, schema.product.id, bounded);
 }
