@@ -299,6 +299,12 @@ const DETERMINISTIC_SCENARIOS: readonly Omit<Scenario, "driver">[] = Object.free
           // Nothing in the order can be perturbed, so the fault could not fire. Throwing
           // (rather than silently no-opping) routes the journey to inconclusive instead of
           // a false pass against an invariant that was never tested.
+          //
+          // This throw fires after the trigger tool succeeded, so the harness records it as
+          // `fault_rejected_by_merchant` ("the fault could not be applied to this merchant").
+          // The literal reason here is an empty or unmatched order rather than a merchant
+          // that refused perturbation, but the message states that plainly and the reported
+          // cause — "could not be applied" — is true either way, so it does not mislead.
           throw new Error(
             "no product in this buyer's order could be repriced, so the price-drift " +
               "fault could not be applied",
@@ -344,7 +350,10 @@ const DETERMINISTIC_SCENARIOS: readonly Omit<Scenario, "driver">[] = Object.free
         const target = contestedProduct(env, "p-coffee-arabica");
         if (!target) {
           // Nothing in the order can be perturbed; throw so the journey is inconclusive
-          // (fault_rejected_by_merchant) rather than a silent pass against INV-INVENTORY.
+          // rather than a silent pass against INV-INVENTORY. As with reg-07, this fires
+          // after the trigger, so the cause reads `fault_rejected_by_merchant` ("could not
+          // be applied to this merchant") — true here (an empty/unmatched order) even though
+          // the reason is not a literal merchant refusal.
           throw new Error(
             "no product in this buyer's order could be stocked out, so the stock-out " +
               "fault could not be applied",

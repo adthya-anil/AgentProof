@@ -30,6 +30,16 @@ import { type PerturbationEvent, PerturbingToolCaller } from "./perturbation.js"
  * contributes exactly once), and within each group take the MAX rather than the
  * sum. All rules objecting to one order reference the same order value, so max
  * equals that value; max is the robust choice if the amounts ever diverge.
+ *
+ * Grouping key note: every money-bearing violation is built with a non-empty
+ * intentId (engine.ts sets `intentId: ctx.intent.id`, and `ids.next("intent")`
+ * never returns ""), so the quoteId/id fallbacks are for defence in depth only —
+ * two intent-less violations on the same real order cannot occur in practice.
+ *
+ * Divergence note: if two rules on one order ever carried genuinely different
+ * money-at-risk, MAX takes the larger with no guard or log. That is deliberate —
+ * over-reporting one order's exposure is safer than double-counting it — and no
+ * divergence is expected because every rule keys its figure off the same order.
  */
 function sumMoneyAtRiskByOrder(rows: readonly Violation[]): Minor {
   const byOrder = new Map<string, Minor>();
