@@ -9,10 +9,16 @@
  */
 export default function Loading() {
   return (
-    <div className="panel">
-      <p className="note" style={{ margin: 0 }}>
-        <span className="pulse">●</span> Loading the stored run…
-      </p>
+    <div className="panel loading-panel" role="status" aria-busy="true">
+      <div className="loading-indicator" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </div>
+      <div>
+        <strong>Loading dashboard</strong>
+        <p className="note">Reading the latest stored run…</p>
+      </div>
     </div>
   );
 }
