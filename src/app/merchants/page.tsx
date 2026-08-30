@@ -150,26 +150,6 @@ export default async function MerchantsPage({
       </div>
 
       <MerchantConsole />
-
-      <div className="panel">
-        <h2>What this does not show</h2>
-        <p className="lead">
-          Both merchants are ours. Neither has the pagination, rate limits, partial
-          failures or eventual consistency of a real storefront, and there is still one
-          policy file. The twelve deterministic regression scenarios also stay on
-          HamperHub — they name exact products on purpose, and generalising them to
-          &ldquo;something cheap&rdquo; would destroy the precision that makes them a
-          regression floor. What ports is the agent-driven half, which never named a
-          product.
-        </p>
-        <p className="meta">
-          What running against Nordwell did prove is narrower and real: it found two bugs
-          no unit test had, because the fixtures had been written from the same assumptions
-          as the code — a tag list read as not-vegan, which would have made the safety rule
-          reject a correct integration, and a re-price that never happened because the demo
-          was mutating its own memory rather than the merchant&rsquo;s.
-        </p>
-      </div>
     </>
   );
 }
