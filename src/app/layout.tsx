@@ -16,14 +16,13 @@ export default function RootLayout({
     <html lang="en">
       <body>
         {/*
-          The rail's surface, drawn separately from what sits on it.
-          The brand lives here in the layout, while the navigation is rendered by each page
-          (it needs to know which entry is current). Two fixed blocks over one continuous
-          background is what lets them read as a single column without the layout having to
-          know the active route.
+          Two levels of chrome, the way a payments dashboard is built: a dark bar that carries
+          identity across the full width, and a white rail beneath it that carries navigation.
+          The brand belongs in the bar rather than above the nav — it is about the product, not
+          about which page you are on, and putting it in the rail made the first navigation
+          group start a third of the way down the screen.
         */}
-        <div className="rail" aria-hidden="true" />
-        <header className="brand">
+        <header className="topbar">
           <div className="masthead">
             <h1>AgentProof</h1>
           </div>
@@ -31,6 +30,7 @@ export default function RootLayout({
             Test every path an AI buyer might take before money moves.
           </p>
         </header>
+        <div className="rail" aria-hidden="true" />
         <div className="shell">{children}</div>
       </body>
     </html>
