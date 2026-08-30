@@ -10,6 +10,7 @@ import type {
 import { createEnvironment, createIntent, prepareEnvironment } from "../harness.js";
 import type { Environment, EnvironmentOptions } from "../harness.js";
 import type { MutationSet } from "../hamperhub/mutations.js";
+import { isNetworkFailure } from "../merchant/transport.js";
 import { type Violation, integrationDefects } from "../policy/violations.js";
 import { type SuiteMetrics, computeSuiteMetrics } from "../report/metrics.js";
 import type { Scenario } from "../scenarios/types.js";
@@ -82,6 +83,27 @@ export type InconclusiveReason =
   | "target_withheld"
   | "fault_trigger_not_reached"
   | "fault_rejected_by_merchant"
+  /**
+   * The merchant could not be reached at all — refused, unresolvable, 5xx, or timed out.
+   *
+   * Previously any such failure became `errored`, and `errored > 0` forces `NOT READY`. So a
+   * third party that was merely *down* produced a verdict reading "this integration is
+   * unsafe": an accusation about someone's checkout drawn from our own inability to open a
+   * socket. It is the same false-verdict shape as counting a withheld rule as a pass, in the
+   * opposite direction, and it becomes reachable the moment the endpoint is a user input.
+   *
+   * A genuine harness bug is still `errored`. That distinction is the whole point: one is a
+   * defect in this tool, the other is a fact about the network.
+   */
+  | "merchant_unreachable"
+  /**
+   * The scenario needs a payment provider that can be told to fail, and none was present.
+   *
+   * This case already returned `inconclusive` but carried no reason, so the footnote's causes
+   * did not sum to its own total — a reader adding up "1 because…" against "3 journeys" finds
+   * the report short by two.
+   */
+  | "fault_needs_simulated_provider"
   /**
    * The agent completed without its target invariant ever firing on a hazard.
    *
@@ -362,6 +384,7 @@ export async function runScenario(
       return {
         ...errorResult(scenario, startedAt, null),
         disposition: "inconclusive" as const,
+        inconclusiveReason: "fault_needs_simulated_provider" as const,
         note:
           "requires the simulated payment provider: this scenario works by " +
           "forcing a provider timeout, which cannot be requested of Razorpay",
@@ -811,11 +834,31 @@ export async function runScenario(
   }
 }
 
+/**
+ * Whether a failure belongs to the merchant or to us.
+ *
+ * The answer decides whether the report makes a claim about someone's checkout or admits it
+ * could not look. Wrong in one direction it accuses a working integration of being unsafe
+ * because a host was down; wrong in the other it hides a real crash in this tool behind a
+ * soft "inconclusive". The rule itself lives beside the transport that raises these, so the
+ * two layers cannot drift into a verdict that depends on which noticed first.
+ */
+function isMerchantFailure(error: unknown): boolean {
+  return isNetworkFailure(error);
+}
+
 function errorResult(
   scenario: Scenario,
   startedAt: number,
   error: unknown,
 ): JourneyResult {
+  /**
+   * A merchant that could not be reached tested nothing, which is `inconclusive` — not a
+   * crash, and emphatically not a safety verdict.
+   */
+  const unreachable = isMerchantFailure(error);
+  const detail = error instanceof Error ? error.message : String(error);
+
   return {
     scenarioId: scenario.id,
     title: scenario.title,
@@ -824,8 +867,10 @@ function errorResult(
     model: scenario.assignedModel ?? null,
     modelReported: null,
     targetsInvariant: scenario.targetsInvariant,
-    disposition: "errored",
-    note: "journey could not be executed",
+    disposition: unreachable ? "inconclusive" : "errored",
+    note: unreachable
+      ? `the merchant could not be reached, so nothing here was tested: ${detail}`
+      : "journey could not be executed",
     violations: [],
     escalations: [],
     integrationDefects: [],
@@ -837,9 +882,10 @@ function errorResult(
     perturbations: [],
     auditEvents: 0,
     exercisedInvariants: [],
-    // An errored journey is not inconclusive; it has its own disposition and its own
-    // reason, and giving it one of these would fold a crash into "proved nothing".
-    inconclusiveReason: null,
+    // A crash keeps `errored` and no reason: folding a bug in this tool into "proved
+    // nothing" would hide it. An unreachable merchant is the opposite — a fact about the
+    // network, which belongs in the inconclusive causes where a reader will see it.
+    inconclusiveReason: unreachable ? "merchant_unreachable" : null,
     withheldInvariants: [],
     toolPath: [],
     msToFirstViolation: null,

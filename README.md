@@ -28,7 +28,7 @@ an API key or network access unless you explicitly opt in.
 
 ```bash
 npm install
-npm test                    # 604 tests (4 need DATABASE_URL)
+npm test                    # 621 tests (4 need DATABASE_URL)
 npm run typecheck
 
 npm run demo:happy          # successful ₹1,399 transaction
@@ -59,6 +59,17 @@ integrations, on the deterministic scripted model so the figures are reproducibl
 Adding the live-agent half from `/preflight` roughly doubles the suite and the
 outcomes will differ run to run — that is the point of it, and why it is reported
 separately rather than averaged into this table.
+
+> **If you re-run the live suite, expect different numbers.** Real models choose
+> their own products and their own tool sequences, so journey counts, which
+> invariants fire, and money at risk all move between runs. Two consecutive live
+> runs disagreeing is the harness working, not a contradiction. Everything in the
+> table above comes from the deterministic suite and is reproducible to the rupee —
+> `tests/claims.test.ts` fails if any of these figures drift, so they cannot rot
+> quietly. Judge the live runs on whether each report's own arithmetic holds:
+> outcomes summing to the journey total, prevented plus not-prevented equalling the
+> at-risk column, and the readiness verdict matching the evidence count printed
+> beside it.
 
 | | Vulnerable integration | Fixed integration |
 |---|---|---|
@@ -511,6 +522,37 @@ before ran two hardcoded journeys — fixed ids, fixed call sequence — and dis
 the result as though a merchant had been tested. It had not been, and the inferred
 mapping was never used for anything except agreeing with the hand-written one on
 that same script. The two features that mattered never met.
+
+### Point it at your own catalogue
+
+Nordwell is served from this app, and that is a fair objection: it is our schema, so
+we could have shaped it to suit ourselves. The answer is not to argue, it is to hand
+over the address.
+
+**Merchants → Merchant GraphQL endpoint** takes any URL. Leave it empty for the
+built-in merchant; paste your own and nothing downstream changes, because nothing
+downstream ever knew which merchant it was talking to. A model reads one response,
+writes the mapping, validation accepts it only by building real `Product` objects
+from it, and the same twelve invariants render the verdict. The report names the
+endpoint it tested, so a verdict can never be mistaken for one about a different shop.
+
+The built-in merchant stays the default deliberately: a demonstration should not
+depend on someone else's uptime at the moment someone is watching.
+
+Because the URL arrives from a browser and the request leaves from the server, the
+address is validated before anything connects — `http`/`https` only, no embedded
+credentials, and cloud metadata services and private or link-local networks refused
+with the specific rule that stopped them. Loopback *is* allowed, because the built-in
+merchant runs there. One limitation stated rather than implied: the check is on the
+literal host, not the address it resolves to, so DNS rebinding would pass it. Closing
+that needs connection-level pinning Node's `fetch` does not expose.
+
+A merchant that cannot be reached is reported `INCONCLUSIVE`, never `NOT READY`.
+Being unable to open a socket says nothing about whether someone's checkout is safe,
+and a tool that answers "unsafe" when it means "I could not look" has told you the
+one thing it exists not to. Requests are bounded at ten seconds
+(`MERCHANT_TIMEOUT_MS`); a host that accepts the connection and never answers used to
+stall a run for thirty minutes.
 
 Measured, quick size, against a merchant the model had not seen:
 
@@ -1286,7 +1328,7 @@ src/app/api/preflight/          Suite runner as a server-sent event stream
 src/app/                        Next.js dashboard (server components elsewhere)
 src/scripts/                    Runnable demos and database tooling
 scripts/dev-db.sh               Local Postgres for development
-tests/                          604 tests
+tests/                          621 tests
 ```
 
 Money is an integer count of paise throughout. Float rupees are banned: an

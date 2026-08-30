@@ -14,7 +14,12 @@ import { type MerchantSchema, readPath } from "./mapping.js";
 /** Injectable so tests need no network and no mock server. */
 export type Fetcher = (
   url: string,
-  init?: { method?: string; headers?: Record<string, string>; body?: string },
+  init?: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+    signal?: AbortSignal;
+  },
 ) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
 
 export class TransportError extends Error {
@@ -25,6 +30,140 @@ export class TransportError extends Error {
     super(message);
     this.name = "TransportError";
   }
+}
+
+/**
+ * How long a third party gets to answer.
+ *
+ * There was no timeout at all, which is survivable against a merchant running in this
+ * process and indefensible against one that is not. A hung connection stalled a run until
+ * the route's own 30-minute ceiling: the page sat there, the suite produced nothing, and
+ * the only signal a user got was that the product appeared broken.
+ *
+ * Ten seconds is generous for a catalogue read and short enough that a dead endpoint is
+ * diagnosed rather than waited on. Overridable because a slow staging merchant is a real
+ * thing and not a reason to be untestable.
+ */
+export const DEFAULT_MERCHANT_TIMEOUT_MS = 10_000;
+
+export function merchantTimeoutMs(): number {
+  const raw = Number(process.env.MERCHANT_TIMEOUT_MS);
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_MERCHANT_TIMEOUT_MS;
+  return Math.trunc(raw);
+}
+
+/**
+ * Bounds a fetcher in time and gives every network failure one recognisable type.
+ *
+ * Wrapped at this single seam rather than at each call site, because there are nine of
+ * them across two transports and a tenth would eventually be added without a timeout.
+ *
+ * The conversion matters as much as the timeout. A refused connection, an unresolvable
+ * host, a TLS failure and an abort all arrive here as unrelated exception shapes, and
+ * anything the runner cannot recognise as a *merchant* failure it treats as a bug in the
+ * harness — which reports the run `NOT READY`, an accusation about the integration's
+ * safety drawn from our own inability to open a socket. Naming them all `TransportError`
+ * is what lets that verdict be `INCONCLUSIVE` instead.
+ */
+export function withTimeout(fetcher: Fetcher, timeoutMs: number): Fetcher {
+  return async (url, init) => {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    /**
+     * Raced, not merely signalled.
+     *
+     * Passing an `AbortSignal` is a request, and it only bounds anything if the fetcher
+     * honours it. Real `fetch` does; a wrapper that retries internally, or any fetcher that
+     * ignores the signal, does not — and the first version of this deadlocked against one,
+     * which is how a bound that exists only on paper gets discovered.
+     */
+    const expiry = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(
+          new TransportError(
+            `the merchant did not respond within ${timeoutMs}ms`,
+            null,
+          ),
+        );
+      }, timeoutMs);
+    });
+
+    try {
+      return await Promise.race([
+        fetcher(url, { ...init, signal: controller.signal }),
+        expiry,
+      ]);
+    } catch (error) {
+      // Already diagnosed, more precisely than this layer could manage.
+      if (error instanceof TransportError) throw error;
+
+      if (isNetworkFailure(error)) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new TransportError(
+          `the merchant could not be reached: ${detail}`,
+          null,
+        );
+      }
+
+      /**
+       * Anything unrecognised is left exactly as it was.
+       *
+       * Converting every exception here would have relabelled a bug in our own code as the
+       * merchant being down — which routes it to `INCONCLUSIVE` and stops the run failing.
+       * "Inconclusive" must not become the place crashes go to hide, so the conversion is
+       * deliberately limited to failures that are recognisably the network's.
+       */
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+}
+
+/**
+ * Codes and shapes the runtime raises when the other end is simply not there.
+ *
+ * Matched on `code` rather than message text, because these come from undici and the TLS
+ * stack with wording that changes between Node versions.
+ */
+const NETWORK_ERROR_CODES = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ENOTFOUND",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+  "EPROTO",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "CERT_HAS_EXPIRED",
+]);
+
+/**
+ * Whether a failure is the network's rather than ours.
+ *
+ * Lives here so the transport and the runner cannot disagree about it: the runner turns this
+ * answer into `INCONCLUSIVE` instead of `NOT READY`, and two copies of the rule would
+ * eventually drift into a verdict that depended on which layer noticed first.
+ */
+export function isNetworkFailure(error: unknown): boolean {
+  if (error instanceof TransportError) return true;
+  if (!(error instanceof Error)) return false;
+
+  // `AbortSignal.timeout` raises TimeoutError; an aborted controller raises AbortError.
+  if (error.name === "TimeoutError" || error.name === "AbortError") return true;
+
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === "string" && NETWORK_ERROR_CODES.has(code)) return true;
+
+  // undici reports this bare message on the outer error and hides the detail in `cause`.
+  if (error.message.includes("fetch failed")) return true;
+
+  const cause = (error as { cause?: unknown }).cause;
+  return cause === undefined || cause === null ? false : isNetworkFailure(cause);
 }
 
 /**
@@ -307,12 +446,24 @@ export class GraphQLTransport implements CatalogTransport {
   }
 }
 
-/** Builds the transport a mapping asks for. */
+/**
+ * Builds the transport a mapping asks for, always bounded in time.
+ *
+ * The timeout is applied here rather than left to callers, so no transport can be
+ * constructed without one. Injected fetchers are wrapped too: a test double resolves
+ * instantly and is unaffected, while a script or route that passes its own fetcher still
+ * cannot accidentally opt out of the bound.
+ */
 export function transportFor(
   schema: MerchantSchema,
   fetcher?: Fetcher,
+  timeoutMs: number = merchantTimeoutMs(),
 ): CatalogTransport {
+  const bounded = withTimeout(
+    fetcher ?? (globalThis.fetch as Fetcher),
+    timeoutMs,
+  );
   return schema.transport.kind === "rest"
-    ? new RestTransport(schema.transport, schema.product.id, fetcher)
-    : new GraphQLTransport(schema.transport, schema.product.id, fetcher);
+    ? new RestTransport(schema.transport, schema.product.id, bounded)
+    : new GraphQLTransport(schema.transport, schema.product.id, bounded);
 }
