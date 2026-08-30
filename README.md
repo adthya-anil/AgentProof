@@ -4,16 +4,119 @@
 
 > Test every path an AI buyer might take before money moves.
 
-Traditional checkout tests follow a fixed script. AI buyers do not — they
-interpret natural language, choose their own tool sequences, retry failed calls,
-and adapt as prices and inventory change. Every individual API call can be valid
-while the complete transaction is financially unsafe.
+---
 
-AgentProof sends autonomous buyer agents through a merchant's checkout, discovers
-unsafe tool-call sequences, and enforces deterministic financial rules that block
-invalid transactions before money moves.
+## In one sentence
 
-**AI explores; deterministic code decides.**
+AI agents are about to be handed real payment credentials on real storefronts.
+**AgentProof is a crash-test facility for that moment** — it sends autonomous AI
+buyers at a checkout thousands of ways, finds the sequences where money moves
+when it should not, and then stays in the request path at runtime to stop them.
+
+## Read this in 60 seconds
+
+A merchant caps discounts at 5%. An AI buyer is told: *"apply every discount I
+qualify for."*
+
+It finds two promotions, 4% and 4.9%. It applies them one after the other. Every
+API call it made was legal, the merchant's own validation approved each one, and
+the buyer's basket left with an **8.7% discount**:
+
+```
+4% then 4.9% applied sequentially = 1 - (0.96 × 0.951) = 8.7% effective
+```
+
+Nothing broke a rule. The merchant still lost money.
+
+This is the shape of the whole problem. A scripted checkout test never finds it,
+because a script never thinks to stack two coupons. The bug does not live in any
+one API call — **it lives in the sequence**, and only something that explores
+sequences will find it.
+
+> Our AI-generated adversarial suite pushes this same defect to **11.44%** plus a
+> floor-price breach on four line items — a path no engineer on this project
+> wrote down.
+
+So AgentProof does two things with one engine:
+
+| | |
+|---|---|
+| **Before you ship** | Autonomous agents attack your checkout. You get a readiness report naming every unsafe sequence, replayable call by call. |
+| **After you ship** | The *same* rules sit in the live request path. A rule that passed preflight is the identical code path in production. |
+
+### The one rule everything is built on
+
+> **Nothing becomes payable without a passing verdict.**
+
+Not a slogan — a structural property you can check in the code. The buyer agent
+holds no payment credential and has no client, method, or code path that reaches
+a payment provider. It can *ask* for a checkout. Creating the payable order is
+physically a different component's job, and that component only acts after the
+arithmetic clears.
+
+**An agent can want anything. It can only spend what the arithmetic allows.**
+
+That is why the reproducible run below catches 5 unsafe transactions with
+**zero money-critical escapes**. The Guard is not a monitor that reports breaches
+after the fact. It is in the way.
+
+---
+
+## At a glance
+
+| | |
+|---|---|
+| **Deterministic financial rules** | 12 invariants, no LLM in any verdict |
+| **Detection recall** | 8/8 seeded defects, measured one mutant at a time |
+| **False-positive rate** | 0/25 safe journeys flagged |
+| **Money-critical escapes** | 0 |
+| **Merchants proven against** | 2 independent data models, plus any URL you paste |
+| **Test suite** | 621 tests, passing offline with no API key |
+| **Real payments** | Razorpay test mode, captured and verified end to end |
+
+Everything above is produced by a command in this repo, and
+`tests/claims.test.ts` fails the build if any published figure drifts from what
+the code actually computes.
+
+---
+
+## See it yourself in five minutes
+
+```bash
+npm install && npm run build && npm start
+```
+
+Then walk these five pages in order. This is the whole argument, and it needs no
+API key, no database, and no network.
+
+| Open | What you see | Why it settles something |
+|---|---|---|
+| **1.** `/hamperhub` | The store under test: catalogue, the six tools an AI buyer gets, live promotions | A report about an integration you cannot see is a report you must take on trust. Note the product badged `not published` — that is missing allergen data, not "no allergens". |
+| **2.** `/hamperhub/agent` | An agent shops. Press the same request again against the **fixed** integration | **The most convincing screen we have.** Identical buyer sentence: one run is blocked at 8.7%, the other completes. Nothing about the difference can be blamed on a different input. |
+| **3.** `/preflight` → **Run** | Journeys streaming in as they execute, tool paths and fired rules appearing live | This is not a recording. The engine runs in-process while you watch. |
+| **4.** `/` then `/violations` | Readiness verdict, outcome counts, money prevented **and money not prevented** | We publish our own failures on the same screen as our successes. Most tools show you only what they caught. |
+| **5.** `/evaluation` | Detection recall, false-positive rate, escapes | **The tool grades itself.** 8 defects seeded one at a time; it reports how many its own rules caught. |
+
+Want the honest-reporting argument in one click? On `/` compare **At risk,
+prevented** against **At risk, NOT prevented**. Those two figures are deliberately
+separate, because summing them and calling the total "prevented" would claim
+credit for the transactions we failed to stop.
+
+For a terminal-only review, `npm run demo:preflight` prints the same report.
+
+---
+
+## Contents
+
+- [Architecture](#architecture) — how the pieces fit
+- [The structural guarantee](#the-structural-guarantee) — why the agent *cannot* move money
+- [How a journey is judged](#how-a-journey-is-judged) — the report's vocabulary
+- [Measured results](#measured-results) — reproducible figures
+- [The deterministic invariants](#the-deterministic-invariants) — all 12 rules
+- [Running against any merchant](#running-against-someone-elses-catalogue) — the mapping DSL
+- [How the Guard scores itself](#seeded-defects) — mutation evaluation
+- [Honest measurement](#honest-measurement) — why the numbers mean something
+- [Limitations](#limitations) — the real gaps
 
 ---
 
@@ -122,18 +225,50 @@ active at runtime.
 
 ## How it works
 
+```mermaid
+flowchart LR
+    subgraph sources["1 · Scenario sources"]
+        direction TB
+        REG["12 fixed regression<br/><i>exact reproductions</i>"]
+        PER["4 state-perturbation<br/><i>world moves mid-journey</i>"]
+        GEN["AI-generated<br/><i>adversarial goals</i>"]
+    end
+
+    AGENT["2 · <b>Buyer agent</b><br/>LLM tool loop<br/><i>scripted · OpenAI · Anthropic</i>"]
+
+    GUARD{"3 · <b>AgentProof Guard</b><br/>12 deterministic invariants<br/><i>arithmetic, never an LLM</i>"}
+
+    BLOCK["<b>BLOCKED</b><br/>violation + attribution<br/><i>no payable order exists</i>"]
+
+    subgraph merchants["4 · Merchant under test"]
+        direction TB
+        HH["HamperHub<br/><i>17 products · 8 seeded defects</i>"]
+        NW["Nordwell<br/><i>separate GraphQL service</i>"]
+        ANY["Any endpoint you paste<br/><i>via mapping DSL</i>"]
+    end
+
+    PAY["5 · Razorpay test mode<br/><i>or offline fake</i>"]
+    AUDIT["Hash-chained audit log<br/><i>tamper-evident</i>"]
+
+    sources --> AGENT
+    AGENT -->|"requests a tool call"| GUARD
+    GUARD -->|"block"| BLOCK
+    GUARD -->|"allow"| merchants
+    merchants --> PAY
+    GUARD -.-> AUDIT
+    BLOCK -.-> AUDIT
+
+    style GUARD fill:#eef1ff,stroke:#2b50ed,stroke-width:3px
+    style BLOCK fill:#fdf1f0,stroke:#b02a1e,stroke-width:2px
+    style AUDIT fill:#e9f8f0,stroke:#0a6c46
+    style AGENT fill:#ffffff,stroke:#5d6885
+    style PAY fill:#ffffff,stroke:#5d6885
 ```
-Scenario generator          Buyer agent            AgentProof Guard
-(fixed + AI-generated)  →  (LLM tool loop)   →   (12 deterministic
-                                                    invariants)
-                                                        │
-                                            allow ─────┼───── block
-                                              │           │
-                                    HamperHub commerce   audit log
-                                    (two-phase checkout) (hash-chained)
-                                              │
-                                    Razorpay test mode / offline fake
-```
+
+Read it left to right: scenarios drive an agent, **every** tool call the agent
+makes passes through the Guard, and only an `allow` reaches the merchant. The
+Guard re-reads live merchant state before deciding — the
+[sequence below](#the-structural-guarantee) shows that handshake in detail.
 
 Two components share one policy engine:
 
@@ -155,6 +290,71 @@ provider at all. Checkout is deliberately two-phase:
 
 A payable order therefore cannot come into existence without a passing verdict,
 by construction rather than by convention.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Buyer agent
+    participant G as AgentProof Guard
+    participant M as Merchant
+    participant P as Payment provider
+
+    A->>G: create_checkout(quote, approval receipt)
+    G->>M: prepareCheckout()
+    M-->>G: checkout intent — nothing payable yet
+    G->>M: re-read live prices, stock, reservations
+    G->>G: evaluate every applicable invariant
+
+    alt any invariant fails
+        G--xA: BLOCKED + reason + attribution
+        Note over P: provider never contacted<br/>no payable order was created
+    else all pass
+        G->>M: authorizeCheckout()
+        M->>P: create order — idempotency key as receipt
+        P-->>A: payable order
+    end
+```
+
+The agent has no credential, no client, and no code path to the provider. The
+arrow from merchant to provider only ever fires after a passing verdict.
+
+---
+
+## How a journey is judged
+
+Every journey ends in exactly one disposition. The vocabulary matters, because
+two of these look like failures and are not, and one looks like a success and is
+not:
+
+```mermaid
+flowchart TD
+    START["Journey ends"] --> Q1{"Did an invariant fire on a<br/>defect in the merchant's code?"}
+    Q1 -->|yes| UV["<b>unsafe_violation</b><br/>the integration was unsafe;<br/>only the Guard stopped it"]
+    Q1 -->|no| Q2{"Did the merchant's own<br/>code refuse correctly?"}
+    Q2 -->|yes| SR["<b>safely_rejected</b><br/>correct outcome, no defect"]
+    Q2 -->|no| Q3{"Does policy require<br/>a human decision?"}
+    Q3 -->|yes| ES["<b>escalated</b><br/>withheld for approval"]
+    Q3 -->|no| Q4{"Did the journey exercise<br/>any invariant at all?"}
+    Q4 -->|no| IN["<b>inconclusive</b><br/>verified nothing;<br/>excluded from coverage"]
+    Q4 -->|yes| PA["<b>passed</b><br/>completed cleanly"]
+
+    style UV fill:#fdf1f0,stroke:#b02a1e
+    style SR fill:#f6f8fc,stroke:#5d6885
+    style ES fill:#fdf6e7,stroke:#9a5b06
+    style IN fill:#ffffff,stroke:#c9d3e1,stroke-dasharray: 4 4
+    style PA fill:#e9f8f0,stroke:#0a6c46
+```
+
+Two consequences worth stating plainly:
+
+- **`unsafe_violation` is a finding about the merchant, not a Guard failure.**
+  The Guard blocked it — that is why money-critical escapes stay at 0. The
+  distinction between this and `safely_rejected` is *attribution*: who caught the
+  problem, not whether anything got through.
+- **`inconclusive` is not a pass.** A live agent that exhausts its tool budget, or
+  never reaches the hazard its scenario targets, verified nothing. Folding that
+  into "safely rejected" would let a stalled agent masquerade as a correct
+  outcome, which is exactly the flattering accounting this tool exists to catch.
 
 ---
 
@@ -363,7 +563,7 @@ Either hands one response to a model and asks, then refuses to believe the answe
 Identical verdicts, from a mapping the model wrote off one response — including
 catching the re-price against a merchant with no version field.
 
-**The model proposes; deterministic code decides.** A proposal is accepted only by
+**A model may write the mapping. It may not certify it.** A proposal is accepted only by
 being *used*: a real `Product` is built from real rows with the proposed paths,
 through the same adapter and the same strict readers the hand-written path uses. So
 `readMoney` throwing, the name check and the stock-must-be-a-count rule all apply
@@ -536,6 +736,38 @@ writes the mapping, validation accepts it only by building real `Product` object
 from it, and the same twelve invariants render the verdict. The report names the
 endpoint it tested, so a verdict can never be mistaken for one about a different shop.
 
+```mermaid
+flowchart LR
+    URL["Paste any<br/>storefront URL"] --> SSRF{"Address<br/>allowed?"}
+    SSRF -->|"refused"| STOP["Rejected, naming the<br/>rule that stopped it"]
+    SSRF -->|"allowed"| READ["Read one<br/>real response"]
+    READ --> INFER["A model proposes<br/>a field mapping"]
+    INFER --> VALID{"Build real Product objects<br/>through the same strict readers"}
+    VALID -->|"refused"| INFER
+    VALID -->|"accepted"| CAPS["Derive capabilities<br/><i>from the mapping itself</i>"]
+    CAPS --> HOLD["Withhold rules whose inputs<br/>the merchant cannot supply"]
+    HOLD --> SUITE["Run the suite<br/><i>agents pick their own products</i>"]
+    SUITE --> VERDICT["<b>Verdict</b><br/>naming which rules ran<br/>and which were withheld"]
+
+    style VERDICT fill:#eef1ff,stroke:#2b50ed,stroke-width:3px
+    style STOP fill:#fdf1f0,stroke:#b02a1e
+    style HOLD fill:#fdf6e7,stroke:#9a5b06,stroke-width:2px
+```
+
+Three gates in that chain do the real work:
+
+- **Address allowed?** `http`/`https` only, no embedded credentials, and cloud
+  metadata services plus private and link-local networks refused — the request
+  leaves from our server, so a pasted URL is an SSRF vector until proven otherwise.
+- **Build real Product objects.** A mapping is accepted only by being *used*. If
+  a path does not resolve, a unit contradicts its value, or stock turns out to be a
+  boolean rather than a count, it goes back to the model.
+- **Withhold.** The step most tools get wrong. A rule whose inputs are absent has
+  three options and only one is honest: read `undefined`, compare it to `undefined`
+  and report a green tick; refuse to run at all; or **declare the requirement,
+  withhold the rule, and say so on the report.** A withheld rule is never counted
+  as a pass it did not earn.
+
 The built-in merchant stays the default deliberately: a demonstration should not
 depend on someone else's uptime at the moment someone is watching.
 
@@ -634,8 +866,8 @@ by position or trusts a status code.
 buyer intent and the commerce tool declarations, then chooses its own sequence of
 tool calls, reacting to each result — the open-ended behaviour a fixed test script
 cannot capture. Every call goes through the Guard, so its autonomy never extends
-to moving money: it can *request* a checkout, but deterministic code decides
-whether one happens.
+to moving money: it can *request* a checkout, but whether one comes into existence
+is settled somewhere it cannot reach.
 
 Two interchangeable models sit behind one interface:
 
@@ -1146,9 +1378,56 @@ list of defects would destroy trust in every other number on the page.
 
 ## Seeded defects
 
+**How do you know the safety layer actually works?** You break the merchant on
+purpose and check whether the rules notice.
+
 `src/lib/hamperhub/mutations.ts` toggles eight realistic bugs. Mutations only
 change the *merchant's* behaviour — they never touch the Guard or the invariants,
 and the scenario suite is not told which is active.
+
+```mermaid
+flowchart LR
+    subgraph iso["Scored one mutant at a time"]
+        direction TB
+        D1["Seed defect 1<br/><i>discount_stacking</i>"]
+        D2["Seed defect 2<br/><i>missing_quote_expiry</i>"]
+        DN["… 8 defects total"]
+    end
+
+    RUN["Run that defect's<br/>regression journey"]
+    CHK{"Did the expected<br/>invariant fire?"}
+
+    iso --> RUN --> CHK
+    CHK -->|yes| HIT["detected"]
+    CHK -->|no| MISS["missed"]
+
+    CLEAN["Run the <b>fixed</b> merchant<br/><i>zero defects present</i>"]
+    FLAG{"Did any rule fire<br/>on correct code?"}
+    CLEAN --> FLAG
+    FLAG -->|yes| FP["false positive"]
+    FLAG -->|no| OK["stayed quiet"]
+
+    HIT --> CARD["<b>Scorecard</b><br/>recall 8/8 · false positives 0/25"]
+    MISS --> CARD
+    FP --> CARD
+    OK --> CARD
+
+    style CARD fill:#eef1ff,stroke:#2b50ed,stroke-width:2px
+    style MISS fill:#fdf1f0,stroke:#b02a1e
+    style FP fill:#fdf1f0,stroke:#b02a1e
+```
+
+**Both halves are load-bearing.** Recall alone is trivially gamed — a rule that
+screams at every transaction catches 100% of defects and is worthless. The clean
+run is the only thing that proves we are not crying wolf, which is why
+`/evaluation` refuses to report a false-positive rate until a defect-free
+baseline exists.
+
+**Why one at a time?** With several defects active, an upstream block hides a
+downstream one: `missing_quote_expiry` issues 24-hour quotes, so
+`INV-QUOTE-EXPIRY` stops the journey at approval and the price-binding defect is
+never reached. Scoring in isolation is the difference between a real recall figure
+and a flattering one.
 
 | Mutation | Defect | Caught by |
 |---|---|---|
