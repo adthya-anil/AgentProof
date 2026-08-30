@@ -8,7 +8,12 @@ import { MerchantAdapter } from "@/lib/merchant/adapter";
 import { inferMapping } from "@/lib/merchant/infer";
 import { type MerchantSchema, parseMerchantSchema } from "@/lib/merchant/mapping";
 import { AdapterCatalogSource } from "@/lib/merchant/source";
-import { merchantTimeoutMs, transportFor } from "@/lib/merchant/transport";
+import { resolveMerchantEndpoint } from "@/lib/merchant/endpoint";
+import {
+  isNetworkFailure,
+  merchantTimeoutMs,
+  transportFor,
+} from "@/lib/merchant/transport";
 import { NORDWELL_MAPPING } from "@/lib/merchants/nordwell";
 import { CAPABILITIES, describeCapability } from "@/lib/policy/capabilities";
 import { loadPolicyFromFile } from "@/lib/policy/load";
@@ -96,8 +101,28 @@ const SAMPLE_QUERY = `query Sample {
 
 export async function POST(request: NextRequest): Promise<Response> {
   loadDotEnv();
-  const endpoint = endpointFor(request);
   const url = new URL(request.url);
+
+  /**
+   * Which merchant, from the caller.
+   *
+   * The whole claim of this page is that the merchant is an input rather than a branch in our
+   * code, and a built-in shop at a fixed address could never demonstrate that. Refused
+   * up front, before the stream opens, so a bad address is a plain error instead of a run that
+   * appears to start and then reports a merchant that was never contacted.
+   */
+  const chosen = resolveMerchantEndpoint(
+    url.searchParams.get("endpoint"),
+    endpointFor(request),
+  );
+  if (!chosen.ok) {
+    return Response.json(
+      { error: "the endpoint was refused", reason: chosen.reason },
+      { status: 400 },
+    );
+  }
+  const endpoint = chosen.url;
+  const builtIn = chosen.builtIn;
   /**
    * Eight goals or twenty. Twenty is the real suite; eight exists because a demonstration
    * someone is watching has a different tolerance for waiting than a nightly run.
@@ -303,6 +328,15 @@ export async function POST(request: NextRequest): Promise<Response> {
         send({
           kind: "done",
           summary: {
+            /**
+             * The address this verdict is about.
+             *
+             * Reported with the result because the endpoint is now chosen by the caller, and a
+             * readiness verdict with no merchant named beside it is a claim about nothing in
+             * particular — trivially mistaken for a statement about a different shop.
+             */
+            endpoint,
+            builtIn,
             journeys: suite.journeys.length,
             passed: suite.passed,
             safelyRejected: suite.safelyRejected,
@@ -328,10 +362,29 @@ export async function POST(request: NextRequest): Promise<Response> {
           },
         });
       } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        /**
+         * The failure most people will actually hit, and it used to read "fetch failed".
+         *
+         * Everything before the first journey — the reset and the one sample response the
+         * mapping is inferred from — talks to the merchant outside any journey, so a dead
+         * endpoint fails here rather than through the runner's `merchant_unreachable` path.
+         * That left the commonest outcome of pasting a wrong URL described by undici's
+         * two-word summary, which says neither what was unreachable nor that the run proved
+         * nothing.
+         *
+         * Says which address, and says explicitly that this is not a verdict. An unreachable
+         * merchant is not a safe merchant and it is not an unsafe one.
+         */
         send({
           kind: "error",
           stage: "run",
-          message: error instanceof Error ? error.message : String(error),
+          unreachable: isNetworkFailure(error),
+          message: isNetworkFailure(error)
+            ? `Could not reach ${endpoint} — ${detail}. Nothing was tested, so this is ` +
+              "not a verdict about the merchant: it could not be contacted at all. " +
+              "Check the URL, or leave the box empty to use the built-in merchant."
+            : detail,
         });
       } finally {
         closed = true;

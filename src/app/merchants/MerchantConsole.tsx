@@ -58,6 +58,10 @@ interface Summary {
   unsafeViolations: number;
   inconclusive: number;
   errored: number;
+  /** The address this verdict is about. */
+  endpoint: string;
+  /** Whether that was the built-in merchant or one the caller named. */
+  builtIn: boolean;
   /** Money on journeys something actually stopped. Not the total at risk. */
   moneyAtRisk: string;
   /** Money that got through, when any did. Null when nothing did. */
@@ -111,6 +115,14 @@ export function MerchantConsole() {
     null,
   );
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Which merchant to test. Empty means the built-in one.
+   *
+   * This box is the claim. Everything downstream — inference, journeys, the twelve
+   * invariants — already treats the merchant as a parameter, but with a fixed address nobody
+   * had to believe it.
+   */
+  const [endpoint, setEndpoint] = useState("");
   const abort = useRef<AbortController | null>(null);
 
   function reset() {
@@ -133,10 +145,28 @@ export function MerchantConsole() {
     abort.current = controller;
 
     try {
-      const response = await fetch(`/api/merchants/run?size=${size}`, {
+      const query = new URLSearchParams({ size });
+      // Empty means the built-in merchant, which keeps the default hermetic.
+      if (endpoint.trim() !== "") query.set("endpoint", endpoint.trim());
+
+      const response = await fetch(`/api/merchants/run?${query}`, {
         method: "POST",
         signal: controller.signal,
       });
+
+      /**
+       * A refused endpoint arrives as JSON, not as a stream.
+       *
+       * Reading it as a stream would surface "no response stream", blaming the transport for
+       * a decision this app made about the address.
+       */
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as {
+          reason?: string;
+        } | null;
+        throw new Error(body?.reason ?? `the run was refused (${response.status})`);
+      }
+
       const reader = response.body?.getReader();
       if (!reader) throw new Error("no response stream");
 
@@ -225,6 +255,37 @@ export function MerchantConsole() {
           twelve invariants deliver a verdict. <strong>No product id and no tool order
           appears anywhere in this flow</strong> — the agent finds the shop and decides for
           itself.
+        </p>
+        {/*
+          The endpoint, as an input. Nothing downstream changes when this changes — which is
+          the entire point, and was impossible to show while the address was computed for you.
+        */}
+        <label className="field">
+          <span>Merchant GraphQL endpoint</span>
+          <input
+            type="url"
+            value={endpoint}
+            onChange={(e) => setEndpoint(e.target.value)}
+            placeholder="https://shop.example/graphql — leave empty for the built-in merchant"
+            disabled={running}
+            spellCheck={false}
+            autoComplete="off"
+          />
+        </label>
+        <p className="meta" style={{ marginTop: 0 }}>
+          {endpoint.trim() === "" ? (
+            <>
+              Using the <strong>built-in</strong> third-party merchant, so a demo never
+              depends on someone else&apos;s uptime. Paste any GraphQL catalogue to point the
+              same twelve invariants at it — no code changes, the mapping is inferred.
+            </>
+          ) : (
+            <>
+              Testing <span className="mono">{endpoint.trim()}</span>. A model will read one
+              response, write the mapping, and the run proceeds only if that mapping builds
+              real products.
+            </>
+          )}
         </p>
         <button className="primary" onClick={() => run("standard")} disabled={running}>
           {running ? "Running…" : "Map and test — 20 journeys"}
@@ -464,6 +525,18 @@ export function MerchantConsole() {
             different claim from the same result across twelve, and only this line tells
             them apart.
           */}
+          {/*
+            The merchant this verdict is about, stated with it. Once the endpoint is a caller's
+            choice, a readiness verdict with no address beside it is a claim about nothing in
+            particular — and trivially misread as being about a different shop.
+          */}
+          <p className="meta" style={{ marginBottom: "0.75rem" }}>
+            <span>
+              Verdict for{" "}
+              <span className="mono">{summary.endpoint}</span>
+              {summary.builtIn ? " (built-in merchant)" : " (endpoint you supplied)"}
+            </span>
+          </p>
           <p className="lead" style={{ marginBottom: 0 }}>
             {summary.withheld.length > 0
               ? `Judged on ${12 - summary.withheld.length} of 12 invariants. ` +
