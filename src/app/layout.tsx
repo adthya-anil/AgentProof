@@ -15,20 +15,23 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <div className="shell">
-          <header>
-            <div className="masthead">
-              <h1>AgentProof</h1>
-              <span className="note">
-                Test every path an AI buyer might take before money moves.
-              </span>
-            </div>
-            <p className="tagline">
-              AI explores; deterministic code decides.
-            </p>
-          </header>
-          {children}
-        </div>
+        {/*
+          The rail's surface, drawn separately from what sits on it.
+          The brand lives here in the layout, while the navigation is rendered by each page
+          (it needs to know which entry is current). Two fixed blocks over one continuous
+          background is what lets them read as a single column without the layout having to
+          know the active route.
+        */}
+        <div className="rail" aria-hidden="true" />
+        <header className="brand">
+          <div className="masthead">
+            <h1>AgentProof</h1>
+          </div>
+          <p className="tagline">
+            Test every path an AI buyer might take before money moves.
+          </p>
+        </header>
+        <div className="shell">{children}</div>
       </body>
     </html>
   );

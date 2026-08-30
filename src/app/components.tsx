@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Fragment } from "react";
 import type { AuditEvent } from "@/lib/audit/events";
 import { formatMinor, roundPercent } from "@/lib/core/money";
 import type { JourneyDisposition } from "@/lib/runner/run";
@@ -25,32 +26,66 @@ export function Tabs({
   variant: IntegrationVariant;
 }) {
   const q = `?integration=${variant}`;
-  const tabs: Array<{ key: typeof active; href: string; label: string }> = [
-    // The merchant comes first: you cannot judge a report about an integration
-    // you have not seen.
-    // Watching it happen is the fastest way to understand the product.
-    { key: "live", href: "/live", label: "Live agent" },
-    { key: "preflight", href: "/preflight", label: "Run preflight" },
-    { key: "hamperhub", href: "/hamperhub", label: "HamperHub" },
-    // Next to the merchant it contrasts with, because the point of the page is the
-    // comparison — a tab buried after the reports would be read as an appendix.
-    { key: "merchants", href: `/merchants${q}`, label: "Merchants" },
-    { key: "run", href: `/${q}`, label: "Run summary" },
-    { key: "violations", href: `/violations${q}`, label: "Violations" },
-    { key: "evaluation", href: `/evaluation`, label: "Evaluation" },
-    { key: "audit", href: `/audit${q}`, label: "Audit trail" },
-    { key: "policy", href: `/policy`, label: "Policy" },
+
+  /**
+   * Grouped, because nine flat destinations described nothing.
+   *
+   * The order was already deliberate — watch it happen, then run something, then read the
+   * result — but as a wrapping strip of tabs that reasoning was invisible. Named regions make
+   * the product explain its own shape before anyone clicks: you cannot judge a report about an
+   * integration you have not seen, so seeing comes first.
+   */
+  const groups: Array<{
+    label: string;
+    items: Array<{ key: typeof active; href: string; label: string }>;
+  }> = [
+    {
+      label: "Watch",
+      items: [
+        { key: "live", href: "/live", label: "Live agent" },
+        { key: "hamperhub", href: "/hamperhub", label: "HamperHub store" },
+      ],
+    },
+    {
+      label: "Test",
+      items: [
+        { key: "preflight", href: "/preflight", label: "Run preflight" },
+        // Beside the merchant it contrasts with: the comparison *is* the point of the page,
+        // and placing it after the reports would read as an appendix.
+        { key: "merchants", href: `/merchants${q}`, label: "Any merchant" },
+      ],
+    },
+    {
+      label: "Results",
+      items: [
+        { key: "run", href: `/${q}`, label: "Run summary" },
+        { key: "violations", href: `/violations${q}`, label: "Violations" },
+        { key: "evaluation", href: `/evaluation`, label: "Evaluation" },
+        { key: "audit", href: `/audit${q}`, label: "Audit trail" },
+      ],
+    },
+    {
+      label: "Reference",
+      items: [{ key: "policy", href: `/policy`, label: "Policy" }],
+    },
   ];
+
   return (
-    <nav className="tabs">
-      {tabs.map((tab) => (
-        <Link
-          key={tab.key}
-          href={tab.href}
-          data-active={String(tab.key === active)}
-        >
-          {tab.label}
-        </Link>
+    <nav className="tabs" aria-label="Sections">
+      {groups.map((group) => (
+        <Fragment key={group.label}>
+          <span className="group">{group.label}</span>
+          {group.items.map((tab) => (
+            <Link
+              key={tab.key}
+              href={tab.href}
+              data-active={String(tab.key === active)}
+              aria-current={tab.key === active ? "page" : undefined}
+            >
+              {tab.label}
+            </Link>
+          ))}
+        </Fragment>
       ))}
     </nav>
   );
