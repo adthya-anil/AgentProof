@@ -295,22 +295,35 @@ const DETERMINISTIC_SCENARIOS: readonly Omit<Scenario, "driver">[] = Object.free
       label: "the supplier raises the coffee price",
       apply: async (env) => {
         const target = contestedProduct(env, "p-coffee-arabica");
-        if (target) {
-          // The exact ₹649.00 when it is HamperHub's arabica, so the reproduction is
-          // unchanged; a proportional rise otherwise, which is all the rule needs.
-          const raised =
-            target.productId === "p-coffee-arabica"
-              ? 64900
-              : target.unitPriceMinor +
-                Math.max(100, Math.round(target.unitPriceMinor * 0.08));
-          if (!(await repriceAt(env, target.productId, raised, "Supplier cost increase"))) {
-            // Refusing to advance the clock too, so nothing about the world moved and the
-            // journey is unambiguously "the fault never fired".
-            throw new Error(
-              "this merchant's prices cannot be moved, so the price-drift fault " +
-                "could not be applied",
-            );
-          }
+        if (!target) {
+          // Nothing in the order can be perturbed, so the fault could not fire. Throwing
+          // (rather than silently no-opping) routes the journey to inconclusive instead of
+          // a false pass against an invariant that was never tested.
+          //
+          // This throw fires after the trigger tool succeeded, so the harness records it as
+          // `fault_rejected_by_merchant` ("the fault could not be applied to this merchant").
+          // The literal reason here is an empty or unmatched order rather than a merchant
+          // that refused perturbation, but the message states that plainly and the reported
+          // cause — "could not be applied" — is true either way, so it does not mislead.
+          throw new Error(
+            "no product in this buyer's order could be repriced, so the price-drift " +
+              "fault could not be applied",
+          );
+        }
+        // The exact ₹649.00 when it is HamperHub's arabica, so the reproduction is
+        // unchanged; a proportional rise otherwise, which is all the rule needs.
+        const raised =
+          target.productId === "p-coffee-arabica"
+            ? 64900
+            : target.unitPriceMinor +
+              Math.max(100, Math.round(target.unitPriceMinor * 0.08));
+        if (!(await repriceAt(env, target.productId, raised, "Supplier cost increase"))) {
+          // Refusing to advance the clock too, so nothing about the world moved and the
+          // journey is unambiguously "the fault never fired".
+          throw new Error(
+            "this merchant's prices cannot be moved, so the price-drift fault " +
+              "could not be applied",
+          );
         }
         env.clock.advanceMinutes(1);
       },
@@ -335,18 +348,27 @@ const DETERMINISTIC_SCENARIOS: readonly Omit<Scenario, "driver">[] = Object.free
       label: "a stock-take reconciles the coffee shelf to zero",
       apply: async (env) => {
         const target = contestedProduct(env, "p-coffee-arabica");
-        if (target) {
-          const applied = await stockOutAt(
-            env,
-            target.productId,
-            "Stock-take correction: shelf count reconciled to zero",
+        if (!target) {
+          // Nothing in the order can be perturbed; throw so the journey is inconclusive
+          // rather than a silent pass against INV-INVENTORY. As with reg-07, this fires
+          // after the trigger, so the cause reads `fault_rejected_by_merchant` ("could not
+          // be applied to this merchant") — true here (an empty/unmatched order) even though
+          // the reason is not a literal merchant refusal.
+          throw new Error(
+            "no product in this buyer's order could be stocked out, so the stock-out " +
+              "fault could not be applied",
           );
-          if (!applied) {
-            throw new Error(
-              "this merchant's stock cannot be moved, so the stock-out fault could " +
-                "not be applied",
-            );
-          }
+        }
+        const applied = await stockOutAt(
+          env,
+          target.productId,
+          "Stock-take correction: shelf count reconciled to zero",
+        );
+        if (!applied) {
+          throw new Error(
+            "this merchant's stock cannot be moved, so the stock-out fault could " +
+              "not be applied",
+          );
         }
         env.clock.advanceMinutes(1);
       },
@@ -486,11 +508,17 @@ const DETERMINISTIC_SCENARIOS: readonly Omit<Scenario, "driver">[] = Object.free
  * other. Replayed as a live goal against a mapped merchant, the same hooks threw: the
  * product does not exist there, and two journeys errored rather than testing anything.
  *
- * So the named product is preferred when the merchant has it, keeping HamperHub's
- * reproductions byte-identical, and otherwise the perturbation follows the buyer. That is
- * arguably the truer statement of intent in both cases: the scenario wants the price of
- * *the thing being bought* to move, and assuming the buyer chose coffee was always an
- * assumption.
+ * The perturbation follows the buyer: the product in the most-recent (just-approved) quote
+ * is preferred, so the fault always lands on *the thing being bought*. The named product is
+ * only a fallback for the deterministic reproductions whose bundle happens to contain it —
+ * and because the scripted HAMPER bundle lists `p-coffee-arabica` first, the quote scan
+ * still lands on arabica for reg-07/reg-08, keeping HamperHub's reproductions byte-identical.
+ *
+ * The old order (named product first) was silently dishonest against a mapped merchant: a
+ * live agent that bought something other than arabica had the fault applied to a shelf it
+ * never touched, so the target invariant never fired and the journey reported a clean pass.
+ * Inverting the preference means the scenario tests what the agent actually did, and returns
+ * null only when nothing in the order can be perturbed at all.
  */
 /**
  * Moves a price, at the merchant when there is one.
@@ -534,21 +562,26 @@ async function stockOutAt(
   return true;
 }
 
-function contestedProduct(
+export function contestedProduct(
   env: Environment,
   preferred: string,
 ): { productId: string; unitPriceMinor: Minor } | null {
+  // Prefer the product the buyer actually reserved. The most recent quote is the one just
+  // approved; scan its line items and take the first one that still exists in state.
+  const quotes = env.service.listQuotes();
+  for (let i = quotes.length - 1; i >= 0; i -= 1) {
+    for (const line of quotes[i]?.lineItems ?? []) {
+      if (env.state.getProduct(line.productId)) {
+        return { productId: line.productId, unitPriceMinor: line.unitPriceMinor };
+      }
+    }
+  }
+
+  // Fall back to the named product only when the quote yields nothing usable — this is what
+  // keeps the deterministic reproductions working even if listQuotes() is ever empty.
   const named = env.state.getProduct(preferred);
   if (named) return { productId: named.id, unitPriceMinor: named.priceMinor };
 
-  // The most recent quote is the one the buyer just approved.
-  const quotes = env.service.listQuotes();
-  for (let i = quotes.length - 1; i >= 0; i -= 1) {
-    const line = quotes[i]?.lineItems[0];
-    if (line && env.state.getProduct(line.productId)) {
-      return { productId: line.productId, unitPriceMinor: line.unitPriceMinor };
-    }
-  }
   return null;
 }
 

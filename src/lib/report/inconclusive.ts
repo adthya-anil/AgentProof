@@ -10,18 +10,28 @@ import type { JourneyResult } from "../runner/run.js";
  * against a merchant with no reservations. The footnote blamed the agent for a limitation of
  * the merchant, in the one paragraph a reader turns to for the reason.
  *
- * The three causes call for three different actions — pick a different merchant, fix the
- * scenario, or give the agent more room — so a report that merges them is not shorter, it is
- * wrong. Shared rather than reimplemented per page so the wording cannot drift into a fourth
- * version of the same mistake.
+ * The four causes call for four different actions — pick a different merchant, fix the
+ * scenario so the agent reaches the trigger, accept that this merchant will not be perturbed,
+ * or give the agent more room — so a report that merges them is not shorter, it is wrong. The
+ * two fault-absent causes especially: "the agent never reached the tool the fault targets" and
+ * "the fault was attempted but this merchant refused it" used to share one value, which blamed
+ * the agent for a limitation of the merchant. Shared rather than reimplemented per page so the
+ * wording cannot drift into yet another version of the same mistake.
  */
 export interface InconclusiveBreakdown {
   /** The invariant the journey targets cannot run against this merchant at all. */
   targetWithheld: number;
-  /** The fault the journey depends on was never applied. */
-  faultNeverFired: number;
+  /** The agent never reached the tool the fault targets, so the fault was never attempted. */
+  faultTriggerNotReached: number;
+  /** The fault was attempted but this merchant refused to be perturbed. */
+  faultRejectedByMerchant: number;
   /** The agent stopped early — exhausted its budget or declined to proceed. */
   agentStopped: number;
+  /**
+   * The agent completed but never presented its target hazard, so the target rule ran
+   * against a benign cart and never fired. Nothing of the target was tested.
+   */
+  targetNotExercised: number;
   total: number;
 }
 
@@ -34,8 +44,10 @@ export function inconclusiveBreakdown(
 
   return {
     targetWithheld: count("target_withheld"),
-    faultNeverFired: count("fault_never_fired"),
+    faultTriggerNotReached: count("fault_trigger_not_reached"),
+    faultRejectedByMerchant: count("fault_rejected_by_merchant"),
     agentStopped: count("agent_stopped"),
+    targetNotExercised: count("target_not_exercised"),
     total: inconclusive.length,
   };
 }
@@ -58,9 +70,22 @@ export function describeInconclusive(
         "against this merchant",
     );
   }
-  if (breakdown.faultNeverFired > 0) {
+  if (breakdown.faultTriggerNotReached > 0) {
     parts.push(
-      `${breakdown.faultNeverFired} because the fault it depends on was never applied`,
+      `${breakdown.faultTriggerNotReached} because the fault it depends on was never ` +
+        "triggered — the agent did not reach it",
+    );
+  }
+  if (breakdown.faultRejectedByMerchant > 0) {
+    parts.push(
+      `${breakdown.faultRejectedByMerchant} because the fault it depends on could not be ` +
+        "applied to this merchant",
+    );
+  }
+  if (breakdown.targetNotExercised > 0) {
+    parts.push(
+      `${breakdown.targetNotExercised} because the agent avoided the hazard it targets, ` +
+        "so the rule never fired on anything unsafe",
     );
   }
   if (breakdown.agentStopped > 0) {

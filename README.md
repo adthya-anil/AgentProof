@@ -28,7 +28,7 @@ an API key or network access unless you explicitly opt in.
 
 ```bash
 npm install
-npm test                    # 582 tests (2 need DATABASE_URL)
+npm test                    # 596 tests (4 need DATABASE_URL)
 npm run typecheck
 
 npm run demo:happy          # successful ₹1,399 transaction
@@ -67,7 +67,7 @@ separately rather than averaged into this table.
 | Escalated for approval | 2 | 1 |
 | Unsafe violations | 5 | 0 |
 | Money-critical escapes | 0 | 0 |
-| Money at risk (prevented) | ₹16,224.18 | ₹12,607.00 |
+| Money at risk (prevented) | ₹13,401.72 | ₹9,809.00 |
 | **Readiness** | **NOT READY** | **READY FOR CONTROLLED TEST** |
 
 Mutation evaluation, one mutant at a time:
@@ -1286,7 +1286,7 @@ src/app/api/preflight/          Suite runner as a server-sent event stream
 src/app/                        Next.js dashboard (server components elsewhere)
 src/scripts/                    Runnable demos and database tooling
 scripts/dev-db.sh               Local Postgres for development
-tests/                          582 tests
+tests/                          596 tests
 ```
 
 Money is an integer count of paise throughout. Float rupees are banned: an

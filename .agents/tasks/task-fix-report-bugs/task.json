@@ -1,0 +1,14 @@
+{
+  "task_id": "task-fix-report-bugs",
+  "task_description": "Fix three confirmed reporting bugs in AgentProof (money double-counting on multi-invariant orders; hardcoded perturbation target causing false live passes; inconclusive footnote conflating two fault causes), each with a test proven to bite. Diagnose the suspicious-passed live journeys and fix if mislabelled. Then systematically stress-test the entire app over its real HTTP routes, all 9 dashboard pages, demo scripts, Postgres persistence, audit chain and concurrency, fixing any further bugs the same way. Keep HamperHub's frozen numbers (8/10/2/5 -> 11/13/1/0, 12/12) intact and update the README test count.",
+  "status": "completed",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004", "FEAT-005", "FEAT-006"],
+  "blocked_reason": null,
+  "verification": {
+    "build": "pass",
+    "tests": "pass",
+    "test_quality": "pass",
+    "docker_build": "skipped",
+    "summary": "rm -rf .next && npm run build compiles (19 routes). typecheck clean. npm test 592 passed / 4 skipped (596 total; 596 passed / 0 skipped with a fresh DATABASE_URL). demo:preflight frozen HamperHub numbers intact: vulnerable 8/10/2/5/0 -> fixed 11/13/1/0/0, 12/12 rules exercised both, 8/8 recall, 0 escapes; money corrected ₹13,401.72 -> ₹9,809.00. Test quality independently verified: reverting the FEAT-005 targetNotExercised fix produces 3 failing tests (disposition 'passed' instead of 'inconclusive', empty footnote); restoring -> 22 passed. Semantic review v1 verdict APPROVED with 5 non-blocking issues; all 5 addressed (Issue 1 fixed with a biting deterministic-perturbation-target test proven to fail when the HAMPER bundle order drifts off arabica; Issues 2-5 justified with documentation/observation). No Dockerfile present, docker_build skipped. Six commits: 8f27432, f1fa90e, b903379, 16c1b0f, fc1e0b9, f211e81."
+  }
+}

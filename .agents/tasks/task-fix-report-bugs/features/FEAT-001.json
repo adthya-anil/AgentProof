@@ -1,0 +1,25 @@
+{
+  "id": "FEAT-001",
+  "type": "chore",
+  "description": "Establish and confirm the green baseline before any change. This proves the starting state so every later regression is attributable. No source changes in this feature.",
+  "status": "completed",
+  "steps": [
+    "Run: export PATH=\"/root/.nvm/versions/node/v22.23.2/bin:$PATH\" at the start of every bash call.",
+    "Run `npm run typecheck` and confirm it is clean.",
+    "Run `npm test` and confirm 578 passed / 4 skipped (no DB) OR 582 passed if DATABASE_URL is set.",
+    "Run `LLM_ADAPTER=scripted PAYMENT_ADAPTER=fake npm run demo:preflight` and record the vulnerable-vs-fixed headline counts. Confirm they are exactly vulnerable 8 passed / 10 safely-rejected / 2 escalated / 5 unsafe / 0 escapes -> fixed 11 / 13 / 1 / 0 / 0, and 12/12 policy rules exercised in both variants. Record the vulnerable 'Total money at risk (prevented)' figure (baseline ₹16,224.18) and note the reg-04-expired-quote and pert-01 per-row money figures shown in the detailed journey list.",
+    "Do NOT modify any source in this feature. Record the baseline numbers in findings."
+  ],
+  "acceptance_criteria": [
+    "typecheck clean",
+    "npm test green (578+4-skipped or 582)",
+    "demo:preflight shows 8/10/2/5 -> 11/13/1/0 with 12/12 both, and the baseline money-at-risk figure is recorded in findings"
+  ],
+  "verification": [
+    "npm run typecheck",
+    "npm test",
+    "LLM_ADAPTER=scripted PAYMENT_ADAPTER=fake npm run demo:preflight"
+  ],
+  "blocked_reason": null,
+  "findings": "Baseline confirmed by orchestrator directly. typecheck clean. npm test: 578 passed / 4 skipped (no DB). demo:preflight (LLM_ADAPTER=scripted PAYMENT_ADAPTER=fake): vulnerable 8 passed / 10 safely-rejected / 2 escalated / 5 unsafe / 0 escapes -> fixed 11 / 13 / 1 / 0 / 0; 12/12 policy rules exercised in BOTH variants. Vulnerable 'Total money at risk (prevented)' = ₹16,224.18; fixed ₹12,607.00. Detail rows confirm reg-04-expired-quote and pert-01 carry the doubled money (Bug 1). Node v22.23.2. Git clean at a51d733."
+}

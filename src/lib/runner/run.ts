@@ -17,16 +17,75 @@ import { InterferingToolCaller } from "./interference.js";
 import { type PerturbationEvent, PerturbingToolCaller } from "./perturbation.js";
 
 /**
- * Why a journey proved nothing. Three genuinely different failures.
+ * Money at risk, attributed once per distinct order rather than once per rule.
+ *
+ * One payable order is one intentId. When two invariants object to the SAME
+ * order (e.g. INV-INVENTORY and INV-QUOTE-EXPIRY both firing on one ₹1399
+ * checkout), that order carries exactly one order's worth of money at risk —
+ * ₹1399, not ₹2798. Summing every violation's moneyAtRiskMinor double-counts
+ * the order once per rule, inflating the figure.
+ *
+ * We group by intentId (falling back to quoteId, then to the content-derived
+ * violation id when intentId is null, so a violation with no intent still
+ * contributes exactly once), and within each group take the MAX rather than the
+ * sum. All rules objecting to one order reference the same order value, so max
+ * equals that value; max is the robust choice if the amounts ever diverge.
+ *
+ * Grouping key note: every money-bearing violation is built with a non-empty
+ * intentId (engine.ts sets `intentId: ctx.intent.id`, and `ids.next("intent")`
+ * never returns ""), so the quoteId/id fallbacks are for defence in depth only —
+ * two intent-less violations on the same real order cannot occur in practice.
+ *
+ * Divergence note: if two rules on one order ever carried genuinely different
+ * money-at-risk, MAX takes the larger with no guard or log. That is deliberate —
+ * over-reporting one order's exposure is safer than double-counting it — and no
+ * divergence is expected because every rule keys its figure off the same order.
+ */
+function sumMoneyAtRiskByOrder(rows: readonly Violation[]): Minor {
+  const byOrder = new Map<string, Minor>();
+  for (const row of rows) {
+    const key = row.intentId || row.quoteId || row.id;
+    const current = byOrder.get(key) ?? 0;
+    if (row.moneyAtRiskMinor > current) byOrder.set(key, row.moneyAtRiskMinor);
+    else if (!byOrder.has(key)) byOrder.set(key, row.moneyAtRiskMinor);
+  }
+  let total = 0;
+  for (const amount of byOrder.values()) total += amount;
+  return total;
+}
+
+/**
+ * Why a journey proved nothing. Four genuinely different failures.
  *
  * Kept apart because they call for different actions: a withheld target means this merchant
- * cannot support the rule, a fault that never fired means the scenario did not reach its
- * trigger, and an agent that stopped means the model gave up. A report that merges them
- * describes a limitation of the merchant as a limitation of the agent.
+ * cannot support the rule; a trigger not reached means the scenario never got the agent to
+ * the tool the fault targets, so the fault was never attempted; a fault rejected by the
+ * merchant means the fault WAS attempted but the merchant refused to be perturbed; and an
+ * agent that stopped means the model gave up. The middle two used to be one value
+ * (`fault_never_fired`), which described "the agent did not reach it" and "this merchant
+ * would not allow it" as the same thing even though the per-row note already told them
+ * apart. A report that merges them describes a limitation of the merchant as a limitation
+ * of the agent.
  */
 export type InconclusiveReason =
   | "target_withheld"
-  | "fault_never_fired"
+  | "fault_trigger_not_reached"
+  | "fault_rejected_by_merchant"
+  /**
+   * The agent completed without its target invariant ever firing on a hazard.
+   *
+   * A live twin of a regression goal carries the goal's `targetsInvariant`, but the
+   * model chooses its own bundle. When it declines the hazard — stays under budget,
+   * never adds the unknown-allergen truffle — the target rule evaluates a benign cart
+   * and passes trivially, so it never fired and the journey completed clean. Reading
+   * that as `passed` is the same false assurance `target_withheld` exists to catch: the
+   * journey proved nothing about the rule it was built to probe, because the unsafe input
+   * never entered the transaction. It says so here rather than borrowing a clean pass.
+   *
+   * Deterministic reproductions force the hazard, so their target always fires; this only
+   * reaches an agent-driven journey that avoided its own hazard.
+   */
+  | "target_not_exercised"
   | "agent_stopped";
 
 export type JourneyDisposition =
@@ -468,23 +527,76 @@ export async function runScenario(
       scenario.targetsInvariant !== null &&
       withheldInvariants.includes(scenario.targetsInvariant);
 
+    /**
+     * A live twin that avoided its own hazard exercised nothing of its target.
+     *
+     * `live-unknown-allergen`, `live-over-budget` and their generated cousins carry a
+     * `targetsInvariant` but let the model pick the bundle. When the agent declines the
+     * hazard — stays under budget, never adds the unknown-allergen truffle — the target rule
+     * evaluates a benign cart and passes trivially: it is in `exercisedInvariants` (it ran)
+     * but never in `firedInvariants` (it had nothing to object to). The transaction the
+     * journey was built to probe never happened.
+     *
+     * Reporting that as `passed` reads as "the integration handled the hazard correctly" when
+     * the truth is "the hazard was never presented to it" — the same false assurance
+     * `targetWithheld` catches for a rule the merchant cannot supply, here for one the agent
+     * chose not to trigger. Coverage credit for it is credit for nothing, and `countDecided`
+     * excludes it below so a suite of hazard-dodging journeys cannot report READY on silence.
+     *
+     * Scoped to `driver === "agent"`: a deterministic reproduction forces the hazard, so its
+     * target always fires. Restricting to agent journeys keeps every one of the 12 fixed
+     * HamperHub reproductions untouched — they fire their target or are already handled — and
+     * confines this strictly to the live/generated twins that improvise.
+     */
+    const firedHere = new Set(
+      [...violations, ...escalations].map((v) => v.invariantId),
+    );
+    const targetNotExercised =
+      scenario.driver === "agent" &&
+      scenario.targetsInvariant !== null &&
+      !targetWithheld &&
+      !firedHere.has(scenario.targetsInvariant) &&
+      // Only reclassify what would otherwise read as a clean outcome. A journey the
+      // agent abandoned is already `inconclusive` via `outcome.inconclusive`; a defect
+      // or escalation elsewhere is a finding worth keeping under its own disposition.
+      outcome.completed &&
+      !selfRejected &&
+      defects.length === 0;
+
     const provedNothing =
       outcome.inconclusive ||
       perturbationMissed ||
       interferenceMissed ||
-      targetWithheld;
+      targetWithheld ||
+      targetNotExercised;
 
     /**
      * Ordered to match the ladder above: a withheld target outranks everything, because
      * when the rule cannot run here nothing the agent did afterwards could have tested it.
      */
+    /**
+     * The two ways a fault can be absent, told apart the way the per-row note already is.
+     *
+     * A fault the merchant refused is one the interferer *attempted* — `apply()` threw and
+     * `failureReason()` is non-null. A fault whose trigger was never reached was never
+     * attempted, so `failureReason()` is null. Perturbations have no `failureReason()` seam:
+     * a perturbation with an `applied()` count of zero always means the trigger was not
+     * reached, so `perturbationMissed` maps to trigger-not-reached.
+     */
+    const faultRejectedByMerchant =
+      interferenceMissed && interferer?.failureReason() != null;
+
     const inconclusiveReason: InconclusiveReason | null = !provedNothing
       ? null
       : targetWithheld
         ? "target_withheld"
         : perturbationMissed || interferenceMissed
-          ? "fault_never_fired"
-          : "agent_stopped";
+          ? faultRejectedByMerchant
+            ? "fault_rejected_by_merchant"
+            : "fault_trigger_not_reached"
+          : targetNotExercised
+            ? "target_not_exercised"
+            : "agent_stopped";
 
     const disposition: JourneyDisposition = provedNothing
       ? "inconclusive"
@@ -524,10 +636,7 @@ export async function runScenario(
           ...new Set([...violations, ...escalations].map((v) => v.invariantId)),
         ],
         money_at_risk: toMajor(
-          [...violations, ...escalations].reduce(
-            (sum, v) => sum + v.moneyAtRiskMinor,
-            0,
-          ),
+          sumMoneyAtRiskByOrder([...violations, ...escalations]),
         ),
       },
     });
@@ -613,6 +722,16 @@ export async function runScenario(
             ? `${outcome.note} — but ${scenario.targetsInvariant} cannot run against ` +
               `this merchant, so nothing here could test it`
             : /**
+               * A live twin that avoided its own hazard says so, rather than reading as a
+               * clean completion. The rule ran and passed, but on a benign cart: the unsafe
+               * input the journey was built to present never entered the transaction, so it
+               * tested nothing of its target.
+               */
+              targetNotExercised
+              ? `${outcome.note} — but the agent did not exercise ` +
+                `${scenario.targetsInvariant}: the hazard it targets never entered the ` +
+                "transaction, so this journey tested nothing of it"
+            : /**
                * A fault that fired is stated even on a passing journey.
                *
                * Otherwise a journey that had a price raised under it and completed anyway
@@ -629,10 +748,7 @@ export async function runScenario(
       firedInvariants: [
         ...new Set([...violations, ...escalations].map((v) => v.invariantId)),
       ],
-      moneyAtRiskMinor: [...violations, ...escalations].reduce(
-        (sum, v) => sum + v.moneyAtRiskMinor,
-        0,
-      ),
+      moneyAtRiskMinor: sumMoneyAtRiskByOrder([...violations, ...escalations]),
       providerOrders,
       duplicatePayableOrders: Math.max(0, payable.length - 1),
       selfRejected,
@@ -825,7 +941,18 @@ function decideReadiness(
  * would be told the report is wrong when the report is the only honest part of it.
  */
 export function countDecided(journeys: readonly JourneyResult[]): number {
-  return journeys.filter((j) => j.exercisedInvariants.length > 0).length;
+  return journeys.filter(
+    (j) =>
+      j.exercisedInvariants.length > 0 &&
+      /**
+       * A journey that avoided its own target hazard put no invariant to work that means
+       * anything. Its target rule ran against a benign cart and passed trivially, so
+       * `exercisedInvariants` is non-empty — but that is coverage of nothing, exactly the
+       * illusion the readiness rule exists to reject. Excluded here so a suite of
+       * hazard-dodging live journeys cannot report READY on evidence it never gathered.
+       */
+      j.inconclusiveReason !== "target_not_exercised",
+  ).length;
 }
 
 export async function runSuite(
