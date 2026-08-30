@@ -171,13 +171,6 @@ export function Tabs({
 
   return (
     <nav className="tabs" aria-label="Sections">
-      <div className="nav-context" aria-hidden="true">
-        <span className="nav-context-mark">AP</span>
-        <span>
-          <strong>Commerce safety</strong>
-          <small>Preflight workspace</small>
-        </span>
-      </div>
       {groups.map((group) => (
         <Fragment key={group.label}>
           <span className="group">{group.label}</span>
@@ -194,10 +187,6 @@ export function Tabs({
           ))}
         </Fragment>
       ))}
-      <div className="nav-footnote" aria-hidden="true">
-        <span />
-        Deterministic policy layer
-      </div>
     </nav>
   );
 }

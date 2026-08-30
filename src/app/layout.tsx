@@ -20,7 +20,6 @@ export default function RootLayout({
         </a>
         <header className="topbar">
           <div className="masthead">
-            <span className="brand-mark" aria-hidden="true" />
             <div className="brand-lockup">
               <h1>AgentProof</h1>
               <span>AI commerce assurance</span>
@@ -29,10 +28,6 @@ export default function RootLayout({
           <p className="tagline">
             Test every path an AI buyer might take before money moves.
           </p>
-          <div className="topbar-mode" aria-label="Product scope">
-            <span aria-hidden="true" />
-            Preflight + runtime controls
-          </div>
         </header>
         <div className="rail" aria-hidden="true" />
         <main className="shell" id="main-content">
